@@ -1,0 +1,4 @@
+@define-color medic_accent @theme_selected_bg_color;
+@define-color medic_on_accent @theme_selected_fg_color;
+@define-color medic_border @theme_fg_color;
+.mount-medic .muted { opacity: 1; }

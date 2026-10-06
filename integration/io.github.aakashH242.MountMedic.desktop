@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Mount Medic
+Comment=Inspect NTFS drives and manage limited recovery
+Exec=/usr/local/bin/mount-medic gui
+Icon=io.github.aakashH242.MountMedic
+Terminal=false
+Categories=System;Utility;
+StartupNotify=true
+StartupWMClass=io.github.aakashH242.MountMedic

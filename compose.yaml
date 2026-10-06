@@ -1,0 +1,18 @@
+services:
+  checks:
+    build:
+      context: .
+      dockerfile: tests/Containerfile
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - .:/source:ro
+      - ./tests/artifacts/compose:/artifacts
+    environment:
+      MM_ARTIFACTS: /artifacts
+    tmpfs:
+      - /work:exec,size=256m
+      - /tmp:exec,size=256m
+    command: [sh, /source/tests/container_checks.sh]

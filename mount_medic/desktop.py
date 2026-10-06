@@ -1,0 +1,672 @@
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import json
+import os
+import time
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Atk, Gio, GLib, Gtk, Pango
+
+from . import appearance, client, dialogs
+from .dialogs import drive_description
+from .engine import REPAIR_NOTICE
+from .model import MedicError
+from .protocol import BUS_NAME
+from .storage import Preferences, read_json
+from .notifications import DISCOVERY_ACTIONS, Notifications
+
+STATE_LABELS = {
+    "unmanaged": "Not monitored", "clean": "No issue detected", "unknown": "Not verified",
+    "mounted_rw": "Available / mounted", "mounted_ro": "Mounted read-only",
+    "dirty": "Dirty flag set", "unclean_journal": "Unclean journal", "failed": "Repair needs attention",
+    "hibernated": "Windows hibernated", "cached_metadata": "Windows metadata cached",
+    "absent": "Disconnected", "mirror_mismatch": "MFT mirror mismatch",
+    "io_or_corruption": "I/O error or corruption", "unsupported_flags": "Windows check required",
+    "io_failure": "Device I/O failure",
+    "busy": "In use", "insufficient_access": "Access unavailable", "missing_dependency": "Missing tools",
+    "unsupported": "Unsupported layout / identity",
+}
+
+
+def checked_time(timestamp) -> str:
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%d %b %H:%M") if timestamp else "—"
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "—"
+
+
+class MedicApplication(Gtk.Application):
+    def __init__(self):
+        GLib.set_prgname(BUS_NAME)
+        super().__init__(application_id=BUS_NAME, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.window = None
+        self.rows = {}
+        self.reports = {}
+        self.pool = ThreadPoolExecutor(max_workers=1)
+        self.preferences = Preferences()
+        for key, report in read_json(self.preferences.state / "last-check.json").items():
+            if isinstance(report, dict) and isinstance(report.get("checked_at"), int):
+                self.reports[key] = {**report, "actions": [], "next_steps": "Saved result. Run a fresh check before acting."}
+        self.watching = False
+        self.background = False
+        self.busy = False
+        self.pending = False
+        self.debounce = None
+        self.indicator = None
+        self.notifications = None
+        self.discovered = set()
+        self.dialog_open = False
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        GLib.set_application_name("Mount Medic")
+        appearance.initialize()
+
+    def do_shutdown(self):
+        if self.notifications:
+            self.notifications.close_all()
+        Gtk.Application.do_shutdown(self)
+
+    def do_command_line(self, command_line):
+        arguments = command_line.get_arguments()
+        if "watch" in arguments:
+            self.watch_in_background()
+        else:
+            self.activate()
+        return 0
+
+    def do_activate(self):
+        if self.window is None:
+            self.build_window()
+        self.window.show_all()
+        self.window.present()
+        self.start_watching()
+        self.refresh()
+
+    def build_window(self):
+        self.window = Gtk.ApplicationWindow(application=self, title="Mount Medic")
+        self.window.set_icon_name(BUS_NAME)
+        self.window.get_style_context().add_class("mount-medic")
+        self.window.set_default_size(760, 640)
+        self.window.connect("delete-event", self.close_window)
+        self.build_header()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.get_style_context().add_class("page")
+        self.window.add(box)
+        heading = Gtk.Box(spacing=12)
+        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        titles.pack_start(appearance.label("Your drives", "page-title"), False, False, 0)
+        self.summary = appearance.label("Discovering NTFS drives…", "muted")
+        titles.pack_start(self.summary, False, False, 0)
+        heading.pack_start(titles, True, True, 0)
+        self.refresh_button = appearance.icon_button("view-refresh-symbolic", "Refresh drive list")
+        self.refresh_button.set_valign(Gtk.Align.CENTER)
+        self.refresh_button.connect("clicked", lambda button: self.refresh())
+        heading.pack_end(self.refresh_button, False, False, 0)
+        box.pack_start(heading, False, False, 0)
+        self.build_drive_list(box)
+        self.build_inspector(box)
+        self.progress = appearance.label("Checks never write to your drive.", "status-line")
+        self.progress.get_accessible().set_role(Atk.Role.STATUSBAR)
+        self.spinner = Gtk.Spinner()
+        status = Gtk.Box(spacing=8)
+        status.pack_start(self.spinner, False, False, 0)
+        status.pack_start(self.progress, True, True, 0)
+        box.pack_start(status, False, False, 0)
+        self.selection_changed(self.selection)
+
+    def build_header(self):
+        header = Gtk.HeaderBar(show_close_button=True)
+        brand = Gtk.Box(spacing=10)
+        icon = Gtk.Image.new_from_icon_name(BUS_NAME, Gtk.IconSize.DIALOG)
+        icon.set_pixel_size(32)
+        brand.pack_start(icon, False, False, 0)
+        words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        for text, style in (("Mount Medic", "brand-name"), ("Drive care, on your terms.", "muted")):
+            label = appearance.label(text, style)
+            label.set_line_wrap(False)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            label.set_width_chars(10)
+            words.pack_start(label, False, False, 0)
+        brand.pack_start(words, False, False, 0)
+        header.pack_start(brand)
+        settings = Gtk.MenuButton(label="Settings")
+        menu = Gtk.Menu()
+        for title, callback in (("Notifications", self.notification_settings), ("Startup", self.startup_settings)):
+            item = Gtk.MenuItem(label=title)
+            item.connect("activate", callback)
+            menu.append(item)
+        menu.show_all()
+        settings.set_popup(menu)
+        header.pack_end(settings)
+        ignored = Gtk.Button(label="Ignore List")
+        ignored.connect("clicked", self.ignored_drives)
+        header.pack_end(ignored)
+        self.window.set_titlebar(header)
+
+    def build_drive_list(self, box):
+        self.store = Gtk.ListStore(str, str, str, str, str, str)
+        tree = Gtk.TreeView(model=self.store)
+        tree.set_enable_search(False)
+        tree.set_tooltip_column(4)
+        tree.get_accessible().set_name("NTFS drives and their current status")
+        for number, title in ((1, "Drive"), (5, "Monitoring"), (2, "Status"), (3, "Last check")):
+            renderer = Gtk.CellRendererText(ypad=14, xpad=12, ellipsize=Pango.EllipsizeMode.END)
+            if number == 3:
+                renderer.set_property("ellipsize", Pango.EllipsizeMode.NONE)
+            column = Gtk.TreeViewColumn(title)
+            renderer.set_property("width-chars", {1: 13, 2: 16, 3: 11, 5: 10}[number])
+            column.pack_start(renderer, True)
+            column.add_attribute(renderer, "markup" if number == 1 else "text", number)
+            column.set_expand(number == 1)
+            tree.append_column(column)
+        self.selection = tree.get_selection()
+        self.selection_handler = self.selection.connect("changed", self.selection_changed)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(160)
+        scroll.add(tree)
+        self.drive_stack = Gtk.Stack()
+        self.drive_stack.get_style_context().add_class("drive-list")
+        self.drive_stack.add_named(scroll, "drives")
+        empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, valign=Gtk.Align.CENTER)
+        empty.get_style_context().add_class("empty-state")
+        empty.pack_start(appearance.label("No NTFS drives found", "section-title"), False, False, 0)
+        empty.pack_start(appearance.label("Connect a drive, then refresh. New drives stay unmonitored until you choose otherwise.", "muted"), False, False, 0)
+        self.drive_stack.add_named(empty, "empty")
+        box.pack_start(self.drive_stack, True, True, 0)
+
+    def build_inspector(self, box):
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panel.get_style_context().add_class("inspector")
+        self.detail_title = appearance.label("Select a drive", "section-title")
+        panel.pack_start(self.detail_title, False, False, 0)
+        self.detail = appearance.label("")
+        self.detail.set_selectable(True)
+        self.detail.set_max_width_chars(64)
+        panel.pack_start(self.detail, False, False, 0)
+        self.permission_summary = appearance.label("", "muted")
+        self.permission_summary.get_style_context().add_class("permissions")
+        panel.pack_start(self.permission_summary, False, False, 0)
+        self.identity_details = appearance.label("")
+        self.identity_details.set_selectable(True)
+        self.identity_details.set_max_width_chars(64)
+        self.identity_expander = Gtk.Expander(label="Drive details")
+        self.identity_expander.add(self.identity_details)
+        panel.pack_start(self.identity_expander, False, False, 0)
+        buttons = Gtk.Box(spacing=8, margin_top=8)
+        self.buttons = {}
+        for title, callback in (("Monitor", self.manage_selected), ("Check now", self.check_selected),
+                                ("Repair", self.repair), ("Permissions", self.settings)):
+            button = Gtk.Button(label=title)
+            button.connect("clicked", callback)
+            buttons.pack_start(button, False, False, 0)
+            self.buttons[title] = button
+        self.buttons["Check now"].get_style_context().add_class("primary-action")
+        self.buttons["Check now"].set_tooltip_text("Read-only inspection. Checking once does not enable background checks.")
+        self.buttons["Permissions"].set_tooltip_text("Manage background checks, automatic repair, and mounting separately.")
+        self.more_button = Gtk.MenuButton(label="More")
+        self.more_button.get_accessible().set_name("More drive actions")
+        menu = Gtk.Menu()
+        for title, callback in (("Mount", self.mount), ("Unmount and inspect", self.unmount),
+                                ("Ignore This Drive", self.ignore_selected), ("Diagnostics", self.details)):
+            item = Gtk.MenuItem(label=title)
+            item.connect("activate", callback)
+            menu.append(item)
+            self.buttons[title] = item
+        menu.show_all()
+        self.more_button.set_popup(menu)
+        buttons.pack_end(self.more_button, False, False, 0)
+        panel.pack_start(buttons, False, False, 0)
+        box.pack_start(panel, False, False, 0)
+        panel.show_all()
+        panel.set_no_show_all(True)
+        panel.hide()
+        self.inspector = panel
+
+    def close_window(self, window, event):
+        if self.background:
+            window.hide()
+            return True
+        return False
+
+    def selected(self):
+        model, iterator = self.selection.get_selected()
+        return self.rows.get(model[iterator][0]) if iterator else None
+
+    def selection_changed(self, selection):
+        row = self.selected()
+        self.refresh_button.set_sensitive(not self.busy)
+        self.more_button.set_sensitive(not self.busy and row is not None)
+        self.identity_expander.set_sensitive(row is not None)
+        for name, button in self.buttons.items():
+            button.set_sensitive(not self.busy and (row is not None or name == "Check now"))
+        if not row:
+            self.detail_title.set_text("Select a drive")
+            self.detail.set_text("New drives remain unmanaged until you enable checks.")
+            self.permission_summary.set_text("Select a drive to manage its permissions.")
+            self.identity_details.set_text("")
+            self.buttons["Check now"].set_label("Check monitored drives")
+            return
+        volume = row["volume"]
+        self.buttons["Check now"].set_label("Check now")
+        self.detail_title.set_text(STATE_LABELS.get(row["state"], "Not verified"))
+        self.detail.set_text(row.get("next_steps", "Run a fresh check before acting."))
+        self.identity_details.set_text(drive_description(volume) + f"\nVolume ID: {volume['id']}\n"
+                                       f"Last check: {checked_time(row.get('checked_at'))}")
+        settings = row.get("settings", {})
+        self.buttons["Monitor"].set_label("Remove" if settings.get("monitor") else "Monitor")
+        self.buttons["Monitor"].set_sensitive(not self.busy and (settings.get("monitor", False) or row["state"] != "absent"))
+        self.buttons["Ignore This Drive"].set_sensitive(not self.busy and not settings.get("monitor"))
+        self.permission_summary.set_text("  ·  ".join(
+            f"{title} {'on' if settings.get(key) else 'off'}" for key, title in
+            (("monitor", "Checks"), ("auto_repair", "Auto-repair"), ("auto_mount", "Auto-mount"))))
+        for name, permitted in (("Repair", "repair" in row.get("actions", [])),
+                                ("Mount", "mount" in row.get("actions", [])),
+                                ("Unmount and inspect", bool(volume.get("mounts")))):
+            self.buttons[name].set_sensitive(not self.busy and permitted)
+            self.buttons[name].set_tooltip_text("Review the drive and confirm before continuing." if permitted else
+                                              "Run a check and review diagnostics; this action is not currently eligible.")
+
+    def submit(self, operation, callback=None):
+        if self.busy:
+            self.pending = True
+            self.show_error("An operation is already running. Wait for its result before requesting another action.")
+            return
+        self.busy = True
+        if self.window:
+            self.spinner.start()
+            self.progress.set_text("Working… Closing this window will not interrupt an active repair.")
+            self.selection_changed(self.selection)
+        future = self.pool.submit(operation)
+
+        def finish():
+            self.busy = False
+            if self.window:
+                self.spinner.stop()
+            try:
+                value = future.result()
+                if self.window:
+                    self.progress.set_text("Finished. Review the drive status above.")
+                if callback:
+                    callback(value)
+            except Exception as error:
+                self.show_error(str(error))
+            if self.window:
+                self.selection_changed(self.selection)
+            if self.pending:
+                self.pending = False
+                GLib.idle_add(self.cycle if self.watching else self.refresh)
+            return False
+
+        future.add_done_callback(lambda done: GLib.idle_add(finish))
+
+    def refresh(self):
+        self.submit(client.list_volumes, self.render)
+
+    def render(self, rows):
+        previous = self.selected()["volume"]["id"] if self.window and self.selected() else None
+        self.rows = {}
+        for row in rows:
+            key = row["volume"]["id"]
+            if key in self.reports and row["state"] not in {"absent", "mounted_rw", "mounted_ro"}:
+                row.update({name: value for name, value in self.reports[key].items() if name not in {"volume", "settings"}})
+            self.rows[key] = row
+        self.discover_notifications(rows)
+        if not self.window:
+            return
+        # Rebuilding the list must not briefly disable controls and discard keyboard focus.
+        with self.selection.handler_block(self.selection_handler):
+            self.render_drive_list(previous)
+        self.selection_changed(self.selection)
+        monitored = sum(bool(row.get("settings", {}).get("monitor")) for row in self.rows.values())
+        count = len(self.rows)
+        self.summary.set_text(f"{count} {'drive' if count == 1 else 'drives'} · {monitored} monitored")
+        self.drive_stack.set_visible_child_name("drives" if count else "empty")
+        self.inspector.set_visible(bool(count))
+
+    def render_drive_list(self, previous):
+        self.store.clear()
+        ignored = self.preferences.ignored()
+        for key, row in self.rows.items():
+            volume = row["volume"]
+            checked = row.get("checked_at")
+            name = GLib.markup_escape_text(volume.get("label") or "NTFS drive")
+            device = GLib.markup_escape_text(volume.get("device") or "Disconnected")
+            size = volume.get("identity", {}).get("size", 0) / (1024 ** 3)
+            membership = "Added" if row.get("settings", {}).get("monitor") else "Not added"
+            if key in ignored:
+                membership = "Added · ignored" if membership == "Added" else "Ignored"
+            iterator = self.store.append([key, f"<b>{name}</b>\n<small>{device} · {size:.1f} GiB</small>",
+                                          STATE_LABELS.get(row["state"], row["state"]),
+                                          checked_time(checked), drive_description(volume) + "\n" +
+                                          STATE_LABELS.get(row["state"], row["state"]) +
+                                          f"\nLast check: {checked_time(checked)}\nMonitoring: {membership}", membership])
+            if key == previous:
+                self.selection.select_iter(iterator)
+        if self.rows and self.selected() is None:
+            self.selection.select_path(Gtk.TreePath.new_first())
+
+    def checked(self, reports):
+        self.preferences.remember(reports)
+        for report in reports:
+            key = report["volume"]["id"]
+            self.reports[key] = report
+            if key in self.rows:
+                self.rows[key].update(report)
+        self.render(list(self.rows.values()))
+
+    def check_selected(self, button):
+        row = self.selected()
+        request = {"op": "check"}
+        if row:
+            request["id"] = row["volume"]["id"]
+        self.submit(lambda: client.call(request), self.checked)
+
+    def confirmation(self, title: str, text: str) -> bool:
+        dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=Gtk.MessageType.WARNING,
+                                   buttons=Gtk.ButtonsType.OK_CANCEL, text=title)
+        dialog.format_secondary_text(text)
+        answer = dialog.run()
+        dialog.destroy()
+        return answer == Gtk.ResponseType.OK
+
+    def settings(self, button=None, volume_id=None):
+        row = self.rows.get(volume_id) if volume_id else self.selected()
+        if not row or self.busy or self.dialog_open:
+            return
+        volume = row["volume"]
+        settings = dict(row.get("settings", {}))
+        if button == "monitor":
+            settings.update(monitor=True, auto_repair=False, auto_mount=False)
+        self.dialog_open = True
+        try:
+            values = dialogs.drive_permissions(self.window, volume, settings)
+        finally:
+            self.dialog_open = False
+        if values is not None:
+            self.save_permissions(row, values)
+
+    def save_permissions(self, row, values):
+        key = row["volume"]["id"]
+        request = {"op": "configure", "id": key, **values}
+        # Save every choice atomically, even if a CLI changed grants while the dialog was open.
+
+        def saved(result):
+            if result.get("monitor"):
+                self.preferences.unignore(key)
+            self.close_notification(key)
+            self.cycle()
+
+        self.submit(lambda: client.call(request), saved)
+
+    def manage_selected(self, button):
+        row = self.selected()
+        if not row:
+            return
+        if not row.get("settings", {}).get("monitor"):
+            self.settings("monitor", row["volume"]["id"])
+        elif self.confirmation("Remove from monitored drives?", drive_description(row["volume"]) +
+                               "\n\nStop background checks and revoke automatic repair and mounting. Diagnostic history is kept."):
+            self.save_permissions(row, {"monitor": False, "auto_repair": False, "auto_mount": False})
+
+    def ignore_selected(self, button):
+        row = self.selected()
+        if row:
+            self.ignore_drive(row["volume"])
+
+    def ignore_drive(self, volume):
+        try:
+            self.preferences.ignore(volume)
+            self.close_notification(volume["id"])
+            self.render(list(self.rows.values()))
+        except (MedicError, OSError) as error:
+            self.show_error(str(error))
+
+    def ignored_drives(self, button):
+        try:
+            key = dialogs.ignored_drives(self.window, self.preferences.ignored())
+            if key:
+                self.preferences.unignore(key)
+                self.discovered.discard(key)
+                self.render(list(self.rows.values()))
+        except (MedicError, OSError) as error:
+            self.show_error(str(error))
+
+    def notification_settings(self, button):
+        try:
+            seconds = dialogs.notification_settings(self.window, self.preferences.notification_seconds())
+            if seconds is not None:
+                self.preferences.set_notification_seconds(seconds)
+        except (MedicError, OSError) as error:
+            self.show_error(str(error))
+
+    def repair(self, button):
+        row = self.selected()
+        if not row:
+            return
+        request = {"op": "repair", "id": row["volume"]["id"], "clear_dirty": True,
+                   "retry": bool(row.get("repair") or row.get("settings", {}).get("attempt"))}
+        text = drive_description(row["volume"]) + "\n\n" + REPAIR_NOTICE
+        if request["retry"]:
+            text += "\nThis is an explicit retry after reviewing the previous attempt. Fresh safety checks run first."
+        dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=Gtk.MessageType.WARNING,
+                                   buttons=Gtk.ButtonsType.OK_CANCEL, text="Attempt limited repair?")
+        dialog.format_secondary_text(text)
+        clear = Gtk.CheckButton(label="Clear dirty flag (-d). Uncheck to request a subsequent Windows check.")
+        clear.set_active(True)
+        dialog.get_content_area().add(clear)
+        dialog.show_all()
+        answer = dialog.run()
+        request["clear_dirty"] = clear.get_active()
+        dialog.destroy()
+        if answer == Gtk.ResponseType.OK:
+            self.submit(lambda: client.repair(request), lambda result: self.checked([result]))
+
+    def mount(self, button):
+        row = self.selected()
+        if row and self.confirmation("Mount this drive?", drive_description(row["volume"])):
+            self.submit(lambda: client.udisks_operation(row["volume"]["id"], "Mount"), lambda result: self.refresh())
+
+    def unmount(self, button):
+        row = self.selected()
+        if not row or not self.confirmation("Unmount and inspect?", "Save work and close files first. Busy drives will not be forced.\n\n" + drive_description(row["volume"])):
+            return
+        key = row["volume"]["id"]
+
+        def unmount_and_check():
+            client.udisks_operation(key, "Unmount")
+            return client.call({"op": "check", "id": key})
+
+        self.submit(unmount_and_check, self.checked)
+
+    def details(self, button):
+        row = self.selected()
+        if not row:
+            return
+        dialog = Gtk.Dialog(title="Drive diagnostics", transient_for=self.window)
+        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
+        dialog.set_default_size(640, 440)
+        view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        view.get_buffer().set_text(json.dumps(row, indent=2, ensure_ascii=True))
+        scroll = Gtk.ScrolledWindow()
+        scroll.add(view)
+        dialog.get_content_area().add(scroll)
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def startup_settings(self, button):
+        from .installer import autostart
+        dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, text="Start after graphical login?")
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Disable", Gtk.ResponseType.NO, "Enable", Gtk.ResponseType.YES)
+        result = dialog.run()
+        dialog.destroy()
+        if result in {Gtk.ResponseType.YES, Gtk.ResponseType.NO}:
+            try:
+                autostart(result == Gtk.ResponseType.YES)
+                if result == Gtk.ResponseType.YES:
+                    self.watch_in_background()
+            except OSError as error:
+                self.show_error(str(error))
+
+    def show_error(self, message):
+        if self.window:
+            self.progress.set_text(message)
+        elif self.preferences.changed("application", message):
+            self.notify("application", "Mount Medic needs attention", message)
+
+    def notification_error(self, message):
+        if self.window:
+            self.progress.set_text(message)
+        else:
+            print(message)
+
+    def notify(self, key, title, body, *, actions=()):
+        try:
+            if self.notifications is None:
+                self.notifications = Notifications(self.preferences, self.notification_action, self.notification_error)
+            self.notifications.show(key, title, body, actions=actions)
+        except (GLib.Error, MedicError, OSError) as error:
+            self.notification_error(str(error))
+
+    def close_notification(self, key):
+        if self.notifications:
+            self.notifications.close(key)
+
+    def discover_notifications(self, rows):
+        present = {row["volume"]["id"] for row in rows if row["state"] != "absent"}
+        ignored = self.preferences.ignored()
+        for key in self.discovered - present:
+            self.close_notification(key)
+        for row in rows:
+            key = row["volume"]["id"]
+            if key in present and key not in self.discovered and key not in ignored and not row.get("settings", {}).get("monitor"):
+                volume = row["volume"]
+                body = f"{volume.get('label') or 'NTFS drive'} · {volume.get('device')}\nChoose Monitor to set permissions, or ignore this drive."
+                self.notify(key, "NTFS drive discovered", body, actions=DISCOVERY_ACTIONS)
+        self.discovered = present
+
+    def notification_action(self, action, key):
+        if action == "default":
+            self.activate()
+            return
+        if action == "ignore":
+            row = self.rows.get(key)
+            if row and not row.get("settings", {}).get("monitor"):
+                self.ignore_drive(row["volume"])
+            return
+        if action != "monitor":
+            return
+        if self.window is None:
+            self.build_window()
+        self.window.show_all()
+        self.window.present()
+        # Resolve the same identity afresh; a reused /dev path is not consent.
+        def show_settings(rows):
+            self.render(rows)
+            row = self.rows.get(key)
+            if row is None or row["state"] == "absent":
+                self.show_error("This drive disconnected. Reconnect it before choosing Monitor.")
+            else:
+                self.settings(None if row.get("settings", {}).get("monitor") else "monitor", volume_id=key)
+        self.submit(client.list_volumes, show_settings)
+
+    def watch_in_background(self):
+        if not self.background:
+            self.background = True
+            self.hold()
+        self.start_watching()
+
+    def start_watching(self):
+        if self.watching:
+            return
+        self.watching = True
+        self.setup_indicator()
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                          "StartServiceByName", GLib.Variant("(su)", ("org.freedesktop.UDisks2", 0)),
+                          GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 5000, None)
+            bus.signal_subscribe("org.freedesktop.UDisks2", None, None, None, None,
+                                 Gio.DBusSignalFlags.NONE, self.device_event, None)
+            self.device_bus = bus
+        except GLib.Error:
+            self.show_error("Hotplug notifications unavailable; login and manual checks still work.")
+        GLib.timeout_add_seconds(15, self.cycle)
+
+    def setup_indicator(self):
+        for name in ("AyatanaAppIndicator3", "AppIndicator3"):
+            try:
+                gi.require_version(name, "0.1")
+                import importlib
+                library = importlib.import_module("gi.repository." + name)
+                self.indicator = library.Indicator.new("mount-medic", BUS_NAME, library.IndicatorCategory.HARDWARE)
+                self.indicator.set_icon_theme_path(str(appearance.ASSETS))
+                self.indicator.set_icon_full(BUS_NAME, "Mount Medic")
+                self.indicator.set_status(library.IndicatorStatus.ACTIVE)
+                menu = Gtk.Menu()
+                for title, callback in (("Open Mount Medic", lambda item: self.activate()),
+                                        ("Check now", lambda item: self.submit(lambda: client.call({"op": "check"}), self.checked)),
+                                        ("Quit", lambda item: self.quit())):
+                    item = Gtk.MenuItem(label=title)
+                    item.connect("activate", callback)
+                    menu.append(item)
+                menu.show_all()
+                self.indicator.set_menu(menu)
+                return
+            except (ImportError, ValueError):
+                continue
+
+    def device_event(self, *arguments):
+        if self.debounce:
+            GLib.source_remove(self.debounce)
+        self.debounce = GLib.timeout_add_seconds(2, self.cycle)
+
+    def cycle(self):
+        self.debounce = None
+
+        def scan():
+            rows = client.list_volumes()
+            reports = []
+            deadline = time.monotonic() + 120
+            for row in rows:
+                if time.monotonic() > deadline:
+                    break
+                settings = row.get("settings", {})
+                if not settings.get("monitor") or row["state"] == "absent":
+                    continue
+                key = row["volume"]["id"]
+                report = client.call({"op": "check", "id": key})[0]
+                if settings.get("auto_repair") and "repair" in report.get("actions", []):
+                    try:
+                        report = client.repair({"op": "automatic", "id": key})
+                    except MedicError as error:
+                        report.update(state="failed", evidence=str(error))
+                reports.append(report)
+            return rows, reports
+
+        def completed(value):
+            rows, reports = value
+            self.checked(reports)
+            self.render(rows)
+            for report in reports:
+                key = report["volume"]["id"]
+                fingerprint = report["state"] + str(report.get("repair", {}).get("started", ""))
+                changed = self.preferences.changed(key, fingerprint)
+                if changed and (report["state"] not in {"clean", "mounted_rw"} or report.get("repair")):
+                    self.notify(key, "Mount Medic recovery completed" if report.get("repair", {}).get("status") == "success" else "NTFS drive needs attention",
+                                report.get("next_steps", report["state"]))
+
+        self.submit(scan, completed)
+        return False
+
+
+def launch(mode: str):
+    if os.geteuid() == 0:
+        raise MedicError("Run the desktop app as your normal user; it authenticates privileged actions separately")
+    if not Gtk.init_check()[0]:
+        raise MedicError("No graphical display is available. Use the CLI commands.")
+    return MedicApplication().run(["mount-medic", mode])

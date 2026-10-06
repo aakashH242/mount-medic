@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Mount Medic
+Exec=/usr/local/bin/mount-medic watch
+Icon=io.github.aakashH242.MountMedic
+Terminal=false

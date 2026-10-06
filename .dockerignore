@@ -1,0 +1,7 @@
+.git
+.idea
+.consequences
+build
+tests/artifacts
+tests/vm/images
+__pycache__

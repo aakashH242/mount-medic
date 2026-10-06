@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.aakashH242.MountMedic
+Exec=/usr/local/lib/mount-medic/worker
+User=root

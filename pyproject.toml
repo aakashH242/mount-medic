@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mount-medic"
+dynamic = ["version"]
+description = "Explicitly authorized, limited NTFS recovery for Linux"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[project.scripts]
+mount-medic = "mount_medic.cli:main"
+
+[tool.setuptools]
+packages = ["mount_medic"]
+
+[tool.setuptools.dynamic]
+version = {attr = "mount_medic.__version__"}
+
+[tool.setuptools.package-data]
+mount_medic = ["assets/*.css", "assets/*.svg", "assets/*.png"]

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Mount Medic"
+  short_description: "Diagnose NTFS drives with or without the desktop app"

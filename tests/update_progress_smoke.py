@@ -40,6 +40,7 @@ app=App()
 if len(sys.argv)>2 and sys.argv[2]=='unwritable':
     def reject_save(*args): raise OSError('Synthetic unwritable update result')
     app.preferences.save_updates=reject_save
+    app.preferences.mark_update_result_seen=reject_save
 GLib.timeout_add_seconds(25,lambda:(app.quit(),False)[1])
 raise SystemExit(app.run(['mount-medic','gui']))
 """

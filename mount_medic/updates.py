@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 from . import __version__
 from .model import MedicError
@@ -64,7 +65,7 @@ def installation_result(target, error=None):
         except (OSError, ReleaseError):
             message = "Update failed. Check Settings → Updates before trying again."
         message += "\n" + str(error)
-    return {"state": state, "message": message}
+    return {"state": state, "message": message, "id": uuid.uuid4().hex}
 
 
 def save_result(target, error=None):
@@ -278,7 +279,7 @@ def install(release: dict, restart: str | None = None, progress=None) -> dict:
                     if progress:
                         progress.result(message)
                     try:
-                        store_result({"state": "restart_failed", "message": message})
+                        store_result({"state": "restart_failed", "message": message, "id": uuid.uuid4().hex})
                     except (MedicError, OSError) as report_error:
                         print(f"Could not save restart failure: {report_error}", file=sys.stderr)
                     raise MedicError(message) from error
@@ -335,6 +336,7 @@ def cli(args) -> dict:
     if args.dry_run:
         return {**result, "dry_run": True, "effects": "No installation or authentication."}
     with update_lock():
+        preferences.save_updates({"install_result": None})
         return install(result["release"])
 
 
@@ -364,12 +366,8 @@ def perform_update(args, progress=None) -> int:
             except Exception as report_error:
                 print(f"Could not report update failure: {report_error}", file=sys.stderr)
             if progress:
-                try:
-                    saved = Preferences().updates().get("install_result") or {}
-                    if not getattr(progress, "result_message", None):
-                        progress.result(saved.get("message", str(error)))
-                except (MedicError, OSError):
-                    progress.result(str(error))
+                if not getattr(progress, "result_message", None):
+                    progress.result(installation_result(args.version, error)["message"])
             from .notifications import desktop_message
             desktop_message("Mount Medic update failed", str(error), "error")
         return 2

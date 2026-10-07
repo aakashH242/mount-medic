@@ -233,6 +233,52 @@ def update_feedback(app, output):
     assert app.toast.message.get_text() == latest["message"]
     assert app.preferences.updates()["install_result"] == {**latest, "seen": True}
 
+    old = {"id": "old", "state": "success", "message": "Older update succeeded"}
+    newer = {"id": "new", "state": "failed", "message": "Newer update failed"}
+    app.preferences.save_updates({"install_result": old})
+    app.pending_update_result = old
+    process.poll.return_value = None
+    with patch("mount_medic.updates.installed", return_value=True), patch("mount_medic.desktop.subprocess.Popen", return_value=process):
+        app.install_update()
+        with updates.update_lock():
+            assert updates.run_update(SimpleNamespace(version=release["version"], restart="gui")) == 2
+        process.poll.return_value = 2
+        wait_for(lambda: not app.updating)
+    assert app.preferences.updates()["install_result"] == old
+    assert not app.show_update_result(), "A refused attempt reused the earlier success"
+    assert "failed or was cancelled" in app.toast.message.get_text()
+    app.preferences.save_updates({"install_result": newer})
+    assert app.show_update_result(), "Suppression of the earlier result hid a new failure"
+    assert app.toast.message.get_text() == newer["message"]
+
+    app.stale_update_result = None
+    app.pending_update_result = old
+    app.preferences.save_updates({"install_result": newer})
+    assert app.show_update_result()
+    assert app.toast.message.get_text() == newer["message"], "Pending handoff hid a newer cached result"
+    assert app.preferences.updates()["install_result"] == {**newer, "seen": True}
+    assert not app.show_update_result()
+
+    app.preferences.save_updates({"install_result": old})
+    feedback = app.show_feedback
+    saved = Event()
+    def write_newer():
+        assert saved.wait(5)
+        Preferences().save_updates({"install_result": newer})
+    writer = Thread(target=write_newer)
+    def concurrent_feedback(message, level):
+        feedback(message, level)
+        saved.set()
+        writer.join(timeout=5)
+        assert not writer.is_alive()
+    writer.start()
+    with patch.object(app, "show_feedback", side_effect=concurrent_feedback):
+        assert app.show_update_result()
+    assert app.preferences.updates()["install_result"] == newer, "Acknowledgment replaced a newer result"
+    assert app.show_update_result()
+    assert app.toast.message.get_text() == newer["message"]
+    print("PASS: refused updates ignore old outcomes; pending/acknowledged results preserve newer failures")
+
 
 def timers_and_levels(app, output):
     app.preferences.set_notification_settings({"toast_seconds": 3})

@@ -90,6 +90,7 @@ class MedicApplication(Gtk.Application):
         self.update_candidate = None
         self.updating = False
         self.pending_update_result = updates.restart_result()
+        self.stale_update_result = None
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -140,12 +141,23 @@ class MedicApplication(Gtk.Application):
         if not self.window or not self.window.get_visible():
             return False
         try:
-            result = self.pending_update_result or self.preferences.updates().get("install_result")
-            if isinstance(result, dict) and not result.get("seen") and isinstance(result.get("message"), str):
+            result = self.pending_update_result
+            try:
+                cached = self.preferences.updates().get("install_result")
+            except (MedicError, OSError):
+                if not result:
+                    raise
+            else:
+                # Coordinators clear old results before installing; a distinct cached
+                # outcome belongs to an update started after this restart handoff.
+                if not result or isinstance(cached, dict) and cached.get("id") and cached.get("id") != result.get("id"):
+                    result = cached
+                    self.pending_update_result = None
+            if isinstance(result, dict) and result != self.stale_update_result and not result.get("seen") and isinstance(result.get("message"), str):
                 self.show_feedback(result["message"], "info" if result.get("state") == "success" else "error")
                 self.pending_update_result = None
                 try:
-                    self.preferences.save_updates({"install_result": {**result, "seen": True}})
+                    self.preferences.mark_update_result_seen(result)
                 except (MedicError, OSError) as error:
                     print(f"Could not mark update result as shown: {error}", file=sys.stderr)
                 return True
@@ -834,6 +846,10 @@ class MedicApplication(Gtk.Application):
         script = "import sys; sys.path.insert(0, '/usr/local/lib/mount-medic'); from mount_medic.updates import main; raise SystemExit(main())"
         try:
             self.preferences.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                previous_result = self.preferences.updates().get("install_result")
+            except (MedicError, OSError):
+                previous_result = None
             with (self.preferences.state / "update.log").open("w") as log:
                 process = subprocess.Popen(["/usr/bin/python3", "-IB", "-c", script, candidate["version"], candidate["sha256"],
                                            "--restart", mode], stdout=log, stderr=log, start_new_session=True)
@@ -842,6 +858,7 @@ class MedicApplication(Gtk.Application):
             return
         self.updating = True
         self.pending_update_result = None
+        self.stale_update_result = previous_result
         def completed():
             if process.poll() is None:
                 return True

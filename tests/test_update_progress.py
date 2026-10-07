@@ -46,6 +46,38 @@ class UpdateProgressTests(unittest.TestCase):
         installer.assert_not_called()
         restart.assert_not_called()
 
+    def test_initial_result_write_failure_never_displays_a_previous_success(self):
+        from types import SimpleNamespace
+        self.preferences.save_updates({'install_result': {'state': 'success', 'message': 'Older attempt succeeded'}})
+        progress = Mock(result_message=None)
+        with patch('mount_medic.storage.Preferences.save_updates', side_effect=OSError('Cannot save new attempt')), patch('mount_medic.updates.source_version', return_value=__version__), patch('mount_medic.updates.recovery_pending', return_value=False), patch.dict(sys.modules, {'mount_medic.notifications': Mock()}):
+            self.assertEqual(updates.run_update(SimpleNamespace(version=TARGET_VERSION, restart='gui'), progress), 2)
+        message = progress.result.call_args.args[0]
+        self.assertIn('Cannot save new attempt', message)
+        self.assertNotIn('Older attempt succeeded', message)
+
+    def test_result_acknowledgement_preserves_a_newer_result(self):
+        old = updates.installation_result(TARGET_VERSION)
+        newer = {**old, 'id': 'newer', 'state': 'failed', 'message': 'New attempt failed'}
+        self.preferences.save_updates({'install_result': newer})
+        self.preferences.mark_update_result_seen(old)
+        self.assertEqual(self.preferences.updates()['install_result'], newer)
+        self.preferences.mark_update_result_seen(newer)
+        self.assertTrue(self.preferences.updates()['install_result']['seen'])
+
+    def test_identical_messages_from_separate_attempts_have_distinct_ids(self):
+        self.assertNotEqual(updates.installation_result(TARGET_VERSION)['id'], updates.installation_result(TARGET_VERSION)['id'])
+
+    def test_cli_clears_previous_result_before_installing(self):
+        from types import SimpleNamespace
+        self.preferences.save_updates({'install_result': {'state': 'success', 'message': 'Older attempt succeeded'}})
+        def install(release):
+            self.assertIsNone(self.preferences.updates()['install_result'])
+            raise MedicError('Synthetic install failure')
+        with patch('mount_medic.updates.fetch_release', return_value=metadata()), patch('mount_medic.updates.install', side_effect=install):
+            with self.assertRaisesRegex(MedicError, 'Synthetic install failure'):
+                updates.cli(SimpleNamespace(action='install', dry_run=False))
+
     def test_failure_only_claims_previous_version_when_recovery_is_clear(self):
         with patch('mount_medic.updates.source_version', return_value=__version__):
             updates.save_result(TARGET_VERSION, MedicError('cancelled'))

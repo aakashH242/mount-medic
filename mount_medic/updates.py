@@ -175,12 +175,10 @@ def stop_desktop() -> int:
         # GApplication.run is a process entry point; each update coordinator invokes it once.
         mode = proxy.run(["mount-medic", "--quit-for-update"])
         if mode in (10, 11):
-            # Shutdown can spend up to 10 seconds revoking remembered approval.
-            deadline = time.monotonic() + 15
+            # After Quit is accepted, wait for the handoff rather than losing the
+            # restart mode to a deadline while the old app is still shutting down.
             while bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                                 GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]:
-                if time.monotonic() >= deadline:
-                    raise MedicError("The desktop app has not closed; retry after it finishes")
                 time.sleep(0.05)
         return mode
     except GLib.Error as error:

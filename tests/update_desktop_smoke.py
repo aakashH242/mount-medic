@@ -19,7 +19,7 @@ class App(MedicApplication):
     def start_watching(self): pass
     def refresh(self): pass
     def do_shutdown(self):
-        if sys.argv[2] == 'slow': time.sleep(7)
+        if sys.argv[2] == 'slow': time.sleep(16)
         Gtk.Application.do_shutdown(self)
 app = App()
 app.busy = sys.argv[2] == 'busy'
@@ -35,7 +35,7 @@ def exercise():
                              GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
     assert not owned(), "Run this test in a private session bus"
     assert stop_desktop() == 0, "No-running-app case must not open the GUI"
-    for mode, busy, expected in (("gui", "idle", 10), ("watch", "idle", 11), ("watch", "busy", 2), ("gui", "slow", 10)):
+    for mode, busy, expected in (("gui", "idle", 10), ("watch", "idle", 11), ("watch", "busy", 2), ("gui", "slow", 10), ("watch", "slow", 11)):
         print(f"Checking {mode}/{busy}", flush=True)
         with tempfile.TemporaryDirectory() as directory:
             environment = {**os.environ, "XDG_CONFIG_HOME": directory, "XDG_STATE_HOME": directory}
@@ -49,10 +49,10 @@ def exercise():
                 # Each real CLI/GUI updater has its own GApplication process lifecycle.
                 started = time.monotonic()
                 coordinator = subprocess.run([sys.executable, "-B", "-c",
-                                              "from mount_medic.updates import stop_desktop; raise SystemExit(stop_desktop())"], timeout=18)
+                                              "from mount_medic.updates import stop_desktop; raise SystemExit(stop_desktop())"], timeout=25)
                 assert coordinator.returncode == expected, coordinator.returncode
                 if busy == "slow":
-                    assert time.monotonic() - started >= 6.5, "Slow-shutdown fixture did not delay revocation"
+                    assert time.monotonic() - started >= 15.5, "Slow-shutdown fixture did not exceed the old deadline"
                 if busy == "busy":
                     assert process.poll() is None, "Update interrupted an active operation"
                 else:

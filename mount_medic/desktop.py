@@ -150,7 +150,9 @@ class MedicApplication(Gtk.Application):
             else:
                 # Coordinators clear old results before installing; a distinct cached
                 # outcome belongs to an update started after this restart handoff.
-                if not result or isinstance(cached, dict) and cached.get("id") and cached.get("id") != result.get("id"):
+                if not result or (isinstance(cached, dict) and cached.get("state") in ("success", "failed", "restart_failed")
+                                  and isinstance(cached.get("message"), str) and isinstance(cached.get("id"), str)
+                                  and cached["id"] and cached["id"] != result.get("id")):
                     result = cached
                     self.pending_update_result = None
             if isinstance(result, dict) and result != self.stale_update_result and not result.get("seen") and isinstance(result.get("message"), str):

@@ -259,6 +259,13 @@ def update_feedback(app, output):
     assert app.preferences.updates()["install_result"] == {**newer, "seen": True}
     assert not app.show_update_result()
 
+    for invalid in ({**newer, "message": None}, {**newer, "id": 42}, {**newer, "state": "invalid"}):
+        app.pending_update_result = old
+        app.preferences.save_updates({"install_result": invalid})
+        assert app.show_update_result(), "Malformed cache displaced a valid restart message"
+        assert app.toast.message.get_text() == old["message"]
+        assert app.preferences.updates()["install_result"] == invalid
+
     app.preferences.save_updates({"install_result": old})
     feedback = app.show_feedback
     saved = Event()

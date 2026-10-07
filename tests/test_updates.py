@@ -117,6 +117,18 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(updates.status(self.preferences)["state"], "unchecked")
         self.assertTrue(updates.status(self.preferences)["error"])
 
+    def test_a_new_check_recovers_a_damaged_update_cache(self):
+        self.preferences.config.mkdir(parents=True, exist_ok=True)
+        for contents in ("{truncated", "[]", "null"):
+            with self.subTest(contents=contents):
+                (self.preferences.config / "updates.json").write_text(contents)
+                self.assertTrue(updates.due(self.preferences))
+                with patch("mount_medic.updates.fetch_release", return_value=metadata()):
+                    result = updates.check(self.preferences)
+                self.assertEqual(result["available"], TARGET_VERSION)
+                self.assertIsNone(result["error"])
+                self.assertFalse(updates.due(self.preferences))
+
     def test_cli_updates_never_discover_or_authenticate_for_checks_and_dry_run(self):
         with patch("mount_medic.updates.fetch_release", return_value=metadata()), patch("mount_medic.client.discover", side_effect=AssertionError("drive discovery")), patch("mount_medic.updates.install", side_effect=AssertionError("installation")):
             result = execute(parser().parse_args(["update", "install", "--dry-run", "--json"]))
@@ -203,7 +215,9 @@ class UpdateTests(unittest.TestCase):
 
 class RecoveryTests(unittest.TestCase):
     def test_process_death_at_each_switch_recovers_a_complete_generation(self):
-        old = {str(LIBRARY / "worker"): (b"old", 0o755), "usr/local/bin/mount-medic": (b"old launcher", 0o755)}
+        old = {str(LIBRARY / "worker"): (b"old", 0o755),
+               str(LIBRARY / "mount_medic/obsolete.py"): (b"removed", 0o644),
+               "usr/local/bin/mount-medic": (b"old launcher", 0o755)}
         new = {str(LIBRARY / "worker"): (b"new", 0o755), "usr/local/bin/mount-medic": (b"new launcher", 0o755)}
         for point in ("external", "exchange", "commit"):
             with self.subTest(point=point), tempfile.TemporaryDirectory() as directory:
@@ -243,6 +257,7 @@ with patch.object(installer, 'payload', return_value=new), patch.object(installe
                     self.assertEqual((root / name).read_bytes(), content[0])
                 if point != "commit":
                     self.assertEqual(read_json(root / LIBRARY / "manifest.json"), old_manifest)
+                self.assertEqual((root / LIBRARY / "mount_medic/obsolete.py").exists(), point != "commit")
                 self.assertEqual(history.read_text(), '{"permissions":"preserved"}')
                 self.assertFalse((root / TRANSACTION).exists())
 

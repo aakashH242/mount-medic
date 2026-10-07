@@ -84,7 +84,11 @@ class Preferences:
         self.config.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (self.config / ".updates.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            saved = self.updates()
+            try:
+                saved = self.updates()
+            except MedicError:
+                # This is a replaceable update cache, separate from drive permissions.
+                saved = {}
             saved.update(changes)
             atomic_json(self.config / "updates.json", saved)
             return saved

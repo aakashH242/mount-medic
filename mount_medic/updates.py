@@ -26,7 +26,7 @@ def due(preferences: Preferences) -> bool:
     try:
         last = preferences.updates().get("last_attempt", 0)
     except (MedicError, OSError):
-        return False
+        return True
     return not isinstance(last, (int, float)) or not 0 <= time.time() - last < CHECK_INTERVAL
 
 

@@ -193,16 +193,14 @@ def install_tree(source: Path, root: Path) -> dict:
     transaction = safe_target(root, str(TRANSACTION))
     transaction.mkdir(parents=True, mode=0o700)
     staged = transaction / "library"
-    manifest = read_json(safe_target(root, str(MANIFEST)))
+    manifest = {}
     try:
         if library.exists():
             for path in library.rglob("*"):
                 safe_target(root, str(path.relative_to(root)))
                 if not (path.is_dir() or path.is_file()):
                     raise MedicError("Unexpected installed file type")
-            shutil.copytree(library, staged)
-        else:
-            staged.mkdir(mode=0o755)
+        staged.mkdir(mode=0o755)
         previous = {}
         for relative, contents in files.items():
             target = safe_target(root, relative)
@@ -216,7 +214,7 @@ def install_tree(source: Path, root: Path) -> dict:
                 raise MedicError("Unexpected installation path")
             manifest[relative] = hashlib.sha256(contents[0]).hexdigest()
         atomic_json(staged / "manifest.json", manifest)
-        # Copied files and directory entries must survive a power loss before switching.
+        # Staged files and directory entries must survive a power loss before switching.
         for path in staged.rglob("*"):
             if path.is_file():
                 with path.open("rb") as stream:

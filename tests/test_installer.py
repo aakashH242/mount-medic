@@ -120,15 +120,19 @@ class InstallerTests(unittest.TestCase):
                 with self.assertRaises(MedicError):
                     install_tree(root, root)
 
-    def test_interrupted_upgrade_retains_previous_manifest(self):
+    def test_upgrade_removes_obsolete_modules_and_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             original = {"usr/local/lib/mount-medic/worker": (b"old", 0o755),
-                        "usr/local/lib/mount-medic/retained": (b"keep", 0o644)}
+                        "usr/local/lib/mount-medic/mount_medic/obsolete.py": (b"old module", 0o644),
+                        "usr/local/lib/mount-medic/mount_medic/assets/old.png": (b"old icon", 0o644)}
             with patch("mount_medic.installer.payload", return_value=original):
                 install_tree(root, root)
-            partial = {"usr/local/lib/mount-medic/worker": (b"new", 0o755)}
-            with patch("mount_medic.installer.payload", return_value=partial):
+            replacement = {"usr/local/lib/mount-medic/worker": (b"new", 0o755)}
+            with patch("mount_medic.installer.payload", return_value=replacement):
                 install_tree(root, root)
             manifest = read_json(root / "usr/local/lib/mount-medic/manifest.json")
-            self.assertIn("usr/local/lib/mount-medic/retained", manifest)
+            self.assertEqual(set(manifest), set(replacement))
+            self.assertEqual((root / "usr/local/lib/mount-medic/worker").read_bytes(), b"new")
+            for removed in original.keys() - replacement.keys():
+                self.assertFalse((root / removed).exists())

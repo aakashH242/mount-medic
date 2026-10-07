@@ -7,7 +7,7 @@ from unittest.mock import patch
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import Gdk, Gio, GLib, Gtk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mount_medic.desktop import MedicApplication, checked_time
@@ -18,6 +18,31 @@ from mount_medic.model import MedicError
 from mount_medic.storage import Preferences
 from mount_medic import updates, __version__
 from update_fixture import TARGET_VERSION, metadata
+
+
+class TrayWatcher:
+    """A private native tray host; no user desktop or drive service is involved."""
+    def __init__(self):
+        self.items = []
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        interface = Gio.DBusNodeInfo.new_for_xml('''<node><interface name="org.kde.StatusNotifierWatcher">
+          <method name="RegisterStatusNotifierItem"><arg type="s" direction="in"/></method>
+          <property name="IsStatusNotifierHostRegistered" type="b" access="read"/>
+          <property name="RegisteredStatusNotifierItems" type="as" access="read"/>
+          <property name="ProtocolVersion" type="i" access="read"/>
+        </interface></node>''').interfaces[0]
+        self.registration = self.bus.register_object("/StatusNotifierWatcher", interface, self.register, self.property, None)
+        self.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
+                          GLib.Variant("(su)", ("org.kde.StatusNotifierWatcher", 0)), None, Gio.DBusCallFlags.NONE, 1000, None)
+
+    def register(self, connection, sender, path, interface, method, parameters, invocation):
+        value = parameters.unpack()[0]
+        self.items.append((sender, value) if value.startswith("/") else (value, "/StatusNotifierItem"))
+        invocation.return_value(None)
+
+    def property(self, connection, sender, path, interface, name):
+        return {"IsStatusNotifierHostRegistered": GLib.Variant("b", True), "ProtocolVersion": GLib.Variant("i", 0),
+                "RegisteredStatusNotifierItems": GLib.Variant("as", [service + path for service, path in self.items])}[name]
 
 
 def update_flows(app, output, sent):
@@ -305,9 +330,10 @@ def drive_flows(app, volume, output, sent):
     assert not failures, failures
 
 
-def window_lifecycle(app):
+def window_lifecycle(app, tray):
     events = []
     failures = []
+    tray_alive = []
     window = app.window
     deadline = GLib.get_monotonic_time() + 5_000_000
 
@@ -321,6 +347,18 @@ def window_lifecycle(app):
     def hidden():
         try:
             assert app.background and not window.get_visible(), "closing exited or left the UI visible"
+            if app.indicator:
+                def received(connection, result, unused):
+                    try:
+                        assert connection.call_finish(result).unpack()[0] == "Active", "closing deactivated the native tray"
+                        tray_alive.append(True)
+                    except Exception as error:
+                        failures.append(error)
+                        app.quit()
+                service, path = tray.items[-1]
+                tray.bus.call(service, path, "org.freedesktop.DBus.Properties", "Get",
+                              GLib.Variant("(ss)", ("org.kde.StatusNotifierItem", "Status")), None,
+                              Gio.DBusCallFlags.NONE, 1000, None, received, None)
             app.show_error("Background check needs attention")
             app.notify.assert_called_with("application", "Mount Medic needs attention", "Background check needs attention")
             events.append("hidden")
@@ -332,10 +370,11 @@ def window_lifecycle(app):
         return False
 
     def reopen():
-        if "background event" not in events and GLib.get_monotonic_time() < deadline:
+        if ("background event" not in events or (app.indicator and not tray_alive)) and GLib.get_monotonic_time() < deadline:
             return True
         try:
             assert "background event" in events, "hotplug callback stopped with the window hidden"
+            assert not app.indicator or tray_alive, "native tray did not respond while the window was hidden"
             app.activate()
             assert app.window is window and window.get_visible(), "reopen did not restore the existing window"
             events.append("reopened")
@@ -360,6 +399,7 @@ def window_lifecycle(app):
 def main():
     output = Path(sys.argv[1])
     output.parent.mkdir(parents=True, exist_ok=True)
+    tray_host = TrayWatcher()
     app = MedicApplication()
     notifier = patch.object(app, "notify")
     sent = notifier.start()
@@ -424,6 +464,8 @@ def main():
     assert app.window.get_icon_name() == BUS_NAME
     app.setup_indicator()
     if app.indicator:
+        settle_until(lambda: bool(tray_host.items))
+        assert tray_host.items, "indicator did not register with the native tray host"
         assert app.indicator.get_icon() == BUS_NAME + "-symbolic"
         assert app.indicator.get_icon_theme_path() == str(ASSETS)
     tray = Gtk.IconTheme.get_default().lookup_icon(BUS_NAME + "-symbolic", 16, Gtk.IconLookupFlags.FORCE_SIZE)
@@ -521,7 +563,7 @@ def main():
     capture(app.window, output.with_stem(output.stem + "-long-label"))
     drive_flows(app, removable, output, sent)
     update_flows(app, output, sent)
-    window_lifecycle(app)
+    window_lifecycle(app, tray_host)
     notifier.stop()
     app.window.destroy()
     app.pool.shutdown()

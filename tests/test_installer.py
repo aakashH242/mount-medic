@@ -133,6 +133,9 @@ class InstallerTests(unittest.TestCase):
                 run.return_value.returncode = 2
                 with self.assertRaisesRegex(MedicError, "Cannot query"):
                     missing_packages(platform)
+                run.side_effect = subprocess.TimeoutExpired("package query", 30)
+                with self.assertRaisesRegex(MedicError, "Package query timed out"):
+                    missing_packages(platform)
 
     def test_debian_residual_configuration_is_not_an_installed_package(self):
         with patch("mount_medic.dependencies.subprocess.run", return_value=Mock(returncode=0, stdout="deinstall ok config-files", stderr="")):

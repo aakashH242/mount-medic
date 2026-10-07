@@ -12,7 +12,8 @@ import shutil
 from unittest.mock import Mock, patch
 
 from mount_medic import __version__, updates
-from mount_medic.cli import execute, exit_status, parser
+from mount_medic.cli import execute, exit_status, main as cli_main, parser
+from mount_medic.dependencies import missing_packages
 from mount_medic.installer import LIBRARY, TRANSACTION, install_tree, prepare_install, recover_install
 from mount_medic.model import MedicError
 from mount_medic.releases import (ReleaseError, allowed_url, extract_archive, fetch_release,
@@ -161,6 +162,18 @@ class UpdateTests(unittest.TestCase):
     def test_headless_update_does_not_create_a_session_bus(self):
         with patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": ""}):
             self.assertEqual(updates.stop_desktop(), 0)
+
+    def test_package_query_timeout_reports_cli_json_and_gui_failure(self):
+        errors = io.StringIO()
+        notifications = Mock()
+        with patch("mount_medic.updates.fetch_release", return_value=metadata()), patch("os.geteuid", return_value=1000), patch.object(Path, "is_file", return_value=True), patch("mount_medic.updates.shutil.which", return_value="/usr/bin/pkexec"), patch("mount_medic.dependencies.family", return_value="debian"), patch("mount_medic.dependencies.missing_packages", side_effect=missing_packages), patch("mount_medic.dependencies.subprocess.run", side_effect=subprocess.TimeoutExpired("dpkg-query", 30)), patch("sys.stderr", errors):
+            with patch.object(sys, "argv", ["mount-medic", "update", "install", "--json"]):
+                self.assertEqual(cli_main(), 2)
+            self.assertIn("Package query timed out", json.loads(errors.getvalue())["error"])
+            with patch.object(sys, "argv", ["update", TARGET_VERSION, metadata()["sha256"], "--restart", "gui"]), patch.dict(sys.modules, {"mount_medic.notifications": notifications}):
+                self.assertEqual(updates.main(), 2)
+            self.assertIn("Package query timed out", self.preferences.updates()["install_error"])
+            notifications.Notifications.return_value.message.assert_called_once_with("Mount Medic update failed", self.preferences.updates()["install_error"])
 
     def test_declined_authentication_restarts_previous_app(self):
         with patch("os.geteuid", return_value=1000), patch.object(Path, "is_file", return_value=True), patch("mount_medic.updates.download_archive", return_value=Path("/tmp/archive")), patch("mount_medic.updates.stop_desktop", return_value=10), patch("mount_medic.updates.worker_running", return_value=False), patch("mount_medic.installer.elevated", side_effect=lambda command: command), patch("mount_medic.updates.subprocess.run", return_value=Mock(returncode=126)) as run, patch("mount_medic.updates.subprocess.Popen") as restart:

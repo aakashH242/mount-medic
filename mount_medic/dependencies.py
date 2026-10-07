@@ -58,8 +58,11 @@ def missing_packages(platform: str, packages: list[str] | None = None) -> list[s
         packages = required_packages(platform)
     missing = []
     for package in packages:
-        result = subprocess.run([*queries[platform], package], capture_output=True, text=True, timeout=30,
-                                env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin", "LC_ALL": "C"})
+        try:
+            result = subprocess.run([*queries[platform], package], capture_output=True, text=True, timeout=30,
+                                    env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin", "LC_ALL": "C"})
+        except subprocess.TimeoutExpired as error:
+            raise MedicError(f"Package query timed out for {package}; try the update again.") from error
         if result.returncode not in (0, 1):
             raise MedicError(f"Cannot query installed package {package}: {result.stderr.strip()}")
         if result.returncode or (platform == "debian" and result.stdout.strip() != "install ok installed"):

@@ -13,7 +13,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, Gtk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mount_medic import updates
+from mount_medic import __version__, updates
 from mount_medic.desktop import MedicApplication
 from mount_medic.model import Identity, MedicError, Volume, diagnosis
 from mount_medic.storage import Preferences, atomic_json
@@ -284,6 +284,19 @@ def update_feedback(app, output):
     assert app.preferences.updates()["install_result"] == newer, "Acknowledgment replaced a newer result"
     assert app.show_update_result()
     assert app.toast.message.get_text() == newer["message"]
+
+    app.pending_update_result = old
+    app.window.hide()
+    with patch("mount_medic.updates.fetch_release", return_value=release), patch("os.geteuid", return_value=1000), patch("mount_medic.updates.installed", return_value=True), patch("mount_medic.updates.confirm_dependencies", return_value=[]), patch("mount_medic.updates.download_archive", side_effect=OSError("Synthetic CLI download failure")), patch("mount_medic.updates.source_version", return_value=__version__), patch("mount_medic.updates.recovery_pending", return_value=False), patch("mount_medic.updates.stop_desktop", side_effect=AssertionError("Failed download closed the app")):
+        try:
+            updates.cli(SimpleNamespace(action="install", dry_run=False))
+            raise AssertionError("CLI download failure was not reported")
+        except OSError as error:
+            assert "Synthetic CLI download failure" in str(error)
+    app.window.show_all()
+    assert app.show_update_result()
+    assert "Synthetic CLI download failure" in app.toast.message.get_text()
+    assert "Older update succeeded" not in app.toast.message.get_text()
     print("PASS: refused updates ignore old outcomes; pending/acknowledged results preserve newer failures")
 
 

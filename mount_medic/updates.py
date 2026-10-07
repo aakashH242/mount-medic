@@ -79,6 +79,16 @@ def store_result(result):
                                "install_result": result})
 
 
+def save_failure(target, error):
+    try:
+        # After clearing the previous result, an existing outcome belongs to this
+        # attempt and may already have been delivered to the reopened app.
+        if not Preferences().updates().get("install_result"):
+            save_result(target, error)
+    except (MedicError, OSError) as report_error:
+        print(f"Could not report update failure: {report_error}", file=sys.stderr)
+
+
 def restart_result():
     value = os.environ.pop("MOUNT_MEDIC_UPDATE_RESULT", "")
     try:
@@ -337,7 +347,11 @@ def cli(args) -> dict:
         return {**result, "dry_run": True, "effects": "No installation or authentication."}
     with update_lock():
         preferences.save_updates({"install_result": None})
-        return install(result["release"])
+        try:
+            return install(result["release"])
+        except (MedicError, ReleaseError, OSError, ImportError) as error:
+            save_failure(result["release"]["version"], error)
+            raise
 
 
 def perform_update(args, progress=None) -> int:
@@ -358,13 +372,7 @@ def perform_update(args, progress=None) -> int:
     except (MedicError, ReleaseError, OSError, ImportError) as error:
         print(f"Mount Medic update: {error}", file=sys.stderr)
         if args.restart:
-            try:
-                # Install failures are recorded before reopening the app. Earlier failures
-                # leave the existing app running and need the same in-app result.
-                if not Preferences().updates().get("install_result"):
-                    save_result(args.version, error)
-            except Exception as report_error:
-                print(f"Could not report update failure: {report_error}", file=sys.stderr)
+            save_failure(args.version, error)
             if progress:
                 if not getattr(progress, "result_message", None):
                     progress.result(installation_result(args.version, error)["message"])

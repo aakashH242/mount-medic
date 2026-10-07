@@ -74,9 +74,10 @@ class UpdateProgressTests(unittest.TestCase):
         def install(release):
             self.assertIsNone(self.preferences.updates()['install_result'])
             raise MedicError('Synthetic install failure')
-        with patch('mount_medic.updates.fetch_release', return_value=metadata()), patch('mount_medic.updates.install', side_effect=install):
+        with patch('mount_medic.updates.fetch_release', return_value=metadata()), patch('mount_medic.updates.install', side_effect=install), patch('mount_medic.updates.source_version', return_value=__version__), patch('mount_medic.updates.recovery_pending', return_value=False):
             with self.assertRaisesRegex(MedicError, 'Synthetic install failure'):
                 updates.cli(SimpleNamespace(action='install', dry_run=False))
+        self.assertIn('Synthetic install failure', self.preferences.updates()['install_result']['message'])
 
     def test_failure_only_claims_previous_version_when_recovery_is_clear(self):
         with patch('mount_medic.updates.source_version', return_value=__version__):

@@ -5,7 +5,7 @@ import sys
 import tempfile
 from threading import Event, Thread
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 import gi
@@ -215,6 +215,23 @@ def update_feedback(app, output):
         dialog.install.clicked()
     assert app.update_dialog is None and app.toast.get_message_type() == Gtk.MessageType.ERROR
     assert "installer launch failure" in app.toast.message.get_text()
+
+    app.pending_update_result = {"state": "success", "message": "Earlier tray update succeeded"}
+    app.window.hide()
+    app.update_candidate = release
+    process = Mock(returncode=2)
+    process.poll.return_value = None
+    with patch("mount_medic.updates.installed", return_value=True), patch("mount_medic.desktop.subprocess.Popen", return_value=process):
+        app.install_update()
+        assert app.pending_update_result is None
+        latest = {"state": "failed", "message": "Newest update failed during download"}
+        app.preferences.save_updates({"install_result": latest})
+        process.poll.return_value = 2
+        wait_for(lambda: not app.updating)
+    app.window.show_all()
+    assert app.show_update_result()
+    assert app.toast.message.get_text() == latest["message"]
+    assert app.preferences.updates()["install_result"] == {**latest, "seen": True}
 
 
 def timers_and_levels(app, output):

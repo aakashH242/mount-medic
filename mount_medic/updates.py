@@ -175,7 +175,7 @@ def stop_desktop() -> int:
                               GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
         proxy = Gio.Application(application_id=BUS_NAME, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE | Gio.ApplicationFlags.IS_LAUNCHER)
         # GApplication.run is a process entry point; each update coordinator invokes it once.
-        mode = proxy.run(["mount-medic", "--quit-for-update"])
+        mode = proxy.run(["mount-medic", "--quit-for-update", "--update-owner=" + owner])
         if mode in (10, 11):
             # Track this connection so a newly opened app cannot prolong the handoff.
             while bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",

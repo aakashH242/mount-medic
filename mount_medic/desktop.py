@@ -113,6 +113,9 @@ class MedicApplication(Gtk.Application):
         if "--update-ready-watch" in arguments:
             return 13 if self.watching and self.background else 2
         if "--quit-for-update" in arguments:
+            owner = next((argument.removeprefix("--update-owner=") for argument in arguments if argument.startswith("--update-owner=")), None)
+            if owner is not None and owner != self.get_dbus_connection().get_unique_name():
+                return 3
             if self.busy or self.dialog_open or any(window.get_visible() and window.get_modal() for window in Gtk.Window.list_toplevels()):
                 return 2
             mode = 10 if self.window and self.window.get_visible() else 11
@@ -838,6 +841,7 @@ class MedicApplication(Gtk.Application):
             self.show_error(str(error))
             return
         self.updating = True
+        self.pending_update_result = None
         def completed():
             if process.poll() is None:
                 return True

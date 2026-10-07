@@ -35,7 +35,7 @@ def exercise():
                              GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
     assert not owned(), "Run this test in a private session bus"
     assert stop_desktop() == 0, "No-running-app case must not open the GUI"
-    for mode, busy, expected in (("gui", "idle", 10), ("watch", "idle", 11), ("watch", "busy", 2), ("gui", "slow", 10), ("watch", "slow", 11), ("gui", "replacement", 3)):
+    for mode, busy, expected in (("gui", "idle", 10), ("watch", "idle", 11), ("watch", "busy", 2), ("gui", "slow", 10), ("watch", "slow", 11), ("gui", "replacement", 3), ("gui", "owner-mismatch", 3)):
         print(f"Checking {mode}/{busy}", flush=True)
         with tempfile.TemporaryDirectory() as directory:
             environment = {**os.environ, "XDG_CONFIG_HOME": directory, "XDG_STATE_HOME": directory}
@@ -52,12 +52,16 @@ def exercise():
                                            GLib.Variant("(su)", (BUS_NAME, 0)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
                     assert queued == 2, "Replacement owner was not queued"
                 started = time.monotonic()
-                coordinator = subprocess.run([sys.executable, "-B", "-c",
-                                              "from mount_medic.updates import stop_desktop; raise SystemExit(stop_desktop())"], timeout=25)
+                script = "from mount_medic.updates import stop_desktop; raise SystemExit(stop_desktop())"
+                if busy == "owner-mismatch":
+                    script = ("from gi.repository import Gio; from mount_medic.protocol import BUS_NAME; "
+                              "app=Gio.Application(application_id=BUS_NAME,flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE|Gio.ApplicationFlags.IS_LAUNCHER); "
+                              "raise SystemExit(app.run(['mount-medic','--quit-for-update','--update-owner=:stale']))")
+                coordinator = subprocess.run([sys.executable, "-B", "-c", script], timeout=25)
                 assert coordinator.returncode == expected, coordinator.returncode
                 if busy == "slow":
                     assert time.monotonic() - started >= 15.5, "Slow-shutdown fixture did not exceed the old deadline"
-                if busy == "busy":
+                if busy in ("busy", "owner-mismatch"):
                     assert process.poll() is None, "Update interrupted an active operation"
                 else:
                     assert process.wait(timeout=5) == 0

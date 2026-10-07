@@ -8,13 +8,28 @@ from unittest.mock import Mock, patch
 
 from mount_medic.dependencies import missing_packages, package_install_command
 from mount_medic.installer import autostart, guided, install_tree, prepare_install, uninstall_tree
-from mount_medic.storage import read_json
+from mount_medic.storage import Preferences, read_json
 from mount_medic.model import MedicError
 
 
 class InstallerTests(unittest.TestCase):
     def test_guided_setup_configures_notifications_only_after_installing(self):
-        with patch("os.geteuid", return_value=1000), patch("os.getuid", return_value=1000), patch("mount_medic.installer.ask", side_effect=[True, False]), patch("mount_medic.installer.subprocess.run") as run, patch("mount_medic.installer.missing_packages", return_value=["ntfs-3g-devel"]), patch("mount_medic.installer.elevated", side_effect=lambda command: command) as elevate, patch("mount_medic.installer.shutil.copytree"), patch("mount_medic.installer.shutil.copy2"), patch("mount_medic.installer.setup_notifications") as setup, patch("builtins.print"):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"XDG_CONFIG_HOME": directory}),
+            patch("os.geteuid", return_value=1000),
+            patch("os.getuid", return_value=1000),
+            patch("mount_medic.installer.ask", side_effect=[True, False]),
+            patch("mount_medic.installer.subprocess.run") as run,
+            patch("mount_medic.installer.missing_packages", return_value=["ntfs-3g-devel"]),
+            patch("mount_medic.installer.elevated", side_effect=lambda command: command) as elevate,
+            patch("mount_medic.installer.shutil.copytree"),
+            patch("mount_medic.installer.shutil.copy2"),
+            patch("mount_medic.installer.setup_notifications") as setup,
+            patch("builtins.print"),
+        ):
+            preferences = Preferences()
+            preferences.save_updates({"install_error": "previous failed update"})
             setup.side_effect = lambda: self.assertEqual(run.call_count, 1)
             guided(Path("/disposable/source"))
             elevate.assert_called_once()
@@ -23,6 +38,7 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("--setup", command)
             self.assertNotEqual(command[1], "/disposable/source/install.py")
             setup.assert_called_once_with()
+            self.assertIsNone(preferences.updates()["install_error"])
 
     def test_declined_install_never_elevates(self):
         with patch("os.geteuid", return_value=1000), patch("mount_medic.installer.ask", return_value=False), patch("mount_medic.installer.missing_packages", return_value=[]), patch("mount_medic.installer.elevated", side_effect=AssertionError("elevated after declining")), patch("builtins.print"):

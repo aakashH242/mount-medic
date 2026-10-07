@@ -57,7 +57,7 @@ def check(preferences: Preferences) -> dict:
     preferences.save_updates({"last_attempt": int(time.time())})
     try:
         release = fetch_release()
-        preferences.save_updates({"release": release, "last_check": int(time.time()), "error": None, "install_error": None})
+        preferences.save_updates({"release": release, "last_check": int(time.time()), "error": None})
     except (ReleaseError, OSError) as error:
         preferences.save_updates({"error": str(error)})
         raise MedicError(f"Update check failed: {error}") from error

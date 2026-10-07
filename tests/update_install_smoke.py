@@ -25,7 +25,7 @@ def exercise_launcher_guard(root, uid):
     guard = installer.MAINTENANCE.replace("/usr/local/lib/.mount-medic-transaction", str(marker))
     command = [sys.executable, "-IB", "-c", guard + "\nprint('started')"]
     blocked = subprocess.run(command, user=uid, group=uid, extra_groups=[], cwd="/tmp", capture_output=True, text=True)
-    assert blocked.returncode == 1 and "--recover" in blocked.stderr and "Traceback" not in blocked.stderr, blocked
+    assert blocked.returncode == 1 and "--recover" in blocked.stderr and "guided installer" in blocked.stderr and "Traceback" not in blocked.stderr, blocked
     (marker / "status.json").unlink()
     staging = subprocess.run(command, user=uid, group=uid, extra_groups=[], cwd="/tmp", capture_output=True, text=True)
     assert staging.returncode == 1 and "--recover" in staging.stderr, staging

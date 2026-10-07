@@ -104,6 +104,16 @@ class UpdateTests(unittest.TestCase):
         self.assertIn("offline", updates.status(self.preferences)["error"])
         self.assertFalse(updates.due(self.preferences))
 
+    def test_installation_failure_remains_until_a_successful_upgrade(self):
+        self.preferences.save_updates({"install_error": "Administrator approval was cancelled", "error": "offline"})
+        with patch("mount_medic.updates.fetch_release", return_value=metadata()):
+            result = updates.check(self.preferences)
+        self.assertEqual(result["error"], "Administrator approval was cancelled")
+        self.assertIsNone(self.preferences.updates()["error"])
+        with patch("os.geteuid", return_value=1000), patch.object(Path, "is_file", return_value=True), patch("mount_medic.updates.download_archive", return_value=Path("/tmp/archive")), patch("mount_medic.updates.stop_desktop", return_value=0), patch("mount_medic.updates.worker_running", return_value=False), patch("mount_medic.installer.elevated", side_effect=lambda command: command), patch("mount_medic.updates.subprocess.run", return_value=Mock(returncode=0)):
+            updates.install(metadata())
+        self.assertIsNone(updates.status(self.preferences)["error"])
+
     def test_clock_changes_cannot_disable_checks(self):
         for last in (0, 999999999999, "invalid", float("nan")):
             self.preferences.save_updates({"last_attempt": last})

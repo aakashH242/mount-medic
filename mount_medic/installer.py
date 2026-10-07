@@ -42,7 +42,7 @@ raise SystemExit(main())
 # Desktop users can stat the transaction directory but cannot read its private journal.
 MAINTENANCE = """from pathlib import Path
 if Path('/usr/local/lib/.mount-medic-transaction').exists():
-    raise SystemExit('Mount Medic update was interrupted. Run: sudo /usr/local/lib/mount-medic/installer --recover')"""
+    raise SystemExit('Mount Medic installation is incomplete. Re-run the guided installer, or run: sudo /usr/local/lib/mount-medic/installer --recover')"""
 
 
 def ask(message: str) -> bool:
@@ -326,6 +326,7 @@ def guided(source: Path) -> None:
             shutil.copy2(source / name, build_source / name)
         subprocess.run(elevated([sys.executable, str(build_source / "install.py"), "--setup", str(build_source),
                                 "--build-user", str(os.getuid())]), check=True)
+    Preferences().save_updates({"install_error": None})
     setup_notifications()
     if ask("Start Mount Medic automatically after graphical login?"):
         autostart(True)

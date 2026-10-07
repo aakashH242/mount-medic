@@ -173,6 +173,8 @@ sudo /usr/local/lib/mount-medic/installer --recover
 
 Then open the app again. Recovery restores the app; it does not change your drive permissions or undo approved package installations.
 
+If that command is missing or isn't recognized, use the manual reinstall below.
+
 For more detail about a failed GUI update, check `~/.local/state/mount-medic/update.log` (or your `XDG_STATE_HOME`). You can also use the manual reinstall below.
 
 </details>

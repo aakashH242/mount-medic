@@ -5,14 +5,15 @@ import sys
 import tempfile
 from threading import Event, Thread
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, Gtk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mount_medic import updates
+from mount_medic import __version__, updates
 from mount_medic.desktop import MedicApplication
 from mount_medic.model import Identity, MedicError, Volume, diagnosis
 from mount_medic.storage import Preferences, atomic_json
@@ -215,6 +216,89 @@ def update_feedback(app, output):
     assert app.update_dialog is None and app.toast.get_message_type() == Gtk.MessageType.ERROR
     assert "installer launch failure" in app.toast.message.get_text()
 
+    app.pending_update_result = {"state": "success", "message": "Earlier tray update succeeded"}
+    app.window.hide()
+    app.update_candidate = release
+    process = Mock(returncode=2)
+    process.poll.return_value = None
+    with patch("mount_medic.updates.installed", return_value=True), patch("mount_medic.desktop.subprocess.Popen", return_value=process):
+        app.install_update()
+        assert app.pending_update_result is None
+        latest = {"state": "failed", "message": "Newest update failed during download"}
+        app.preferences.save_updates({"install_result": latest})
+        process.poll.return_value = 2
+        wait_for(lambda: not app.updating)
+    app.window.show_all()
+    assert app.show_update_result()
+    assert app.toast.message.get_text() == latest["message"]
+    assert app.preferences.updates()["install_result"] == {**latest, "seen": True}
+
+    old = {"id": "old", "state": "success", "message": "Older update succeeded"}
+    newer = {"id": "new", "state": "failed", "message": "Newer update failed"}
+    app.preferences.save_updates({"install_result": old})
+    app.pending_update_result = old
+    process.poll.return_value = None
+    with patch("mount_medic.updates.installed", return_value=True), patch("mount_medic.desktop.subprocess.Popen", return_value=process):
+        app.install_update()
+        with updates.update_lock():
+            assert updates.run_update(SimpleNamespace(version=release["version"], restart="gui")) == 2
+        process.poll.return_value = 2
+        wait_for(lambda: not app.updating)
+    assert app.preferences.updates()["install_result"] == old
+    assert not app.show_update_result(), "A refused attempt reused the earlier success"
+    assert "failed or was cancelled" in app.toast.message.get_text()
+    app.preferences.save_updates({"install_result": newer})
+    assert app.show_update_result(), "Suppression of the earlier result hid a new failure"
+    assert app.toast.message.get_text() == newer["message"]
+
+    app.stale_update_result = None
+    app.pending_update_result = old
+    app.preferences.save_updates({"install_result": newer})
+    assert app.show_update_result()
+    assert app.toast.message.get_text() == newer["message"], "Pending handoff hid a newer cached result"
+    assert app.preferences.updates()["install_result"] == {**newer, "seen": True}
+    assert not app.show_update_result()
+
+    for invalid in ({**newer, "message": None}, {**newer, "id": 42}, {**newer, "state": "invalid"}):
+        app.pending_update_result = old
+        app.preferences.save_updates({"install_result": invalid})
+        assert app.show_update_result(), "Malformed cache displaced a valid restart message"
+        assert app.toast.message.get_text() == old["message"]
+        assert app.preferences.updates()["install_result"] == invalid
+
+    app.preferences.save_updates({"install_result": old})
+    feedback = app.show_feedback
+    saved = Event()
+    def write_newer():
+        assert saved.wait(5)
+        Preferences().save_updates({"install_result": newer})
+    writer = Thread(target=write_newer)
+    def concurrent_feedback(message, level):
+        feedback(message, level)
+        saved.set()
+        writer.join(timeout=5)
+        assert not writer.is_alive()
+    writer.start()
+    with patch.object(app, "show_feedback", side_effect=concurrent_feedback):
+        assert app.show_update_result()
+    assert app.preferences.updates()["install_result"] == newer, "Acknowledgment replaced a newer result"
+    assert app.show_update_result()
+    assert app.toast.message.get_text() == newer["message"]
+
+    app.pending_update_result = old
+    app.window.hide()
+    with patch("mount_medic.updates.fetch_release", return_value=release), patch("os.geteuid", return_value=1000), patch("mount_medic.updates.installed", return_value=True), patch("mount_medic.updates.confirm_dependencies", return_value=[]), patch("mount_medic.updates.download_archive", side_effect=OSError("Synthetic CLI download failure")), patch("mount_medic.updates.source_version", return_value=__version__), patch("mount_medic.updates.recovery_pending", return_value=False), patch("mount_medic.updates.stop_desktop", side_effect=AssertionError("Failed download closed the app")):
+        try:
+            updates.cli(SimpleNamespace(action="install", dry_run=False))
+            raise AssertionError("CLI download failure was not reported")
+        except OSError as error:
+            assert "Synthetic CLI download failure" in str(error)
+    app.window.show_all()
+    assert app.show_update_result()
+    assert "Synthetic CLI download failure" in app.toast.message.get_text()
+    assert "Older update succeeded" not in app.toast.message.get_text()
+    print("PASS: refused updates ignore old outcomes; pending/acknowledged results preserve newer failures")
+
 
 def timers_and_levels(app, output):
     app.preferences.set_notification_settings({"toast_seconds": 3})
@@ -261,7 +345,8 @@ def coordinator_feedback(server):
     for result in ({"updated": TARGET_VERSION}, MedicError("Synthetic cancelled install")):
         calls, finished = len(server.calls), []
         with patch("sys.argv", ["updater", TARGET_VERSION, "a" * 64, "--restart", "watch"]), patch("mount_medic.updates.fetch_release", return_value=release), patch("mount_medic.updates.install", side_effect=result if isinstance(result, Exception) else None, return_value=result):
-            thread = Thread(target=lambda: finished.append(updates.main()))
+            args = SimpleNamespace(version=TARGET_VERSION, sha256="a" * 64, restart="watch")
+            thread = Thread(target=lambda: finished.append(updates.run_update(args)))
             thread.start()
             wait_for(lambda: bool(finished), timeout=5)
             thread.join()

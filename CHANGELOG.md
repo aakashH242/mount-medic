@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.1 — 7 October 2026
+
+Mount Medic 1.2.1 makes app updates easier to follow.
+
+- See a small update window while downloading, waiting for your administrator password, installing, and restarting.
+- Mount Medic reopens when the update finishes and shows the result inside the app. If it was running in the tray, it returns to the tray.
+- If an update fails, see whether your current version was kept. An interrupted installation still shows how to recover it.
+- Get a clear message if the update installed but the app could not reopen, or if the result could not be saved.
+- Keep update messages readable with large fonts, and prevent two updates from running at the same time.
+
+To update, open **Settings → Updates** or run `mount-medic update install`. Your saved drive permissions and preferences are preserved. The new progress window is available for updates started from 1.2.1 onward; updating from an older version uses that version's update screen.
+
 ## 1.2.0 — 7 October 2026
 
 Mount Medic 1.2.0 makes everyday drive care easier, with fewer password prompts and clearer feedback.

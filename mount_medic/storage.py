@@ -114,6 +114,15 @@ class Preferences:
         return read_json(self.config / "updates.json")
 
     def save_updates(self, changes: dict) -> dict:
+        return self._update_cache(lambda saved: saved.update(changes))
+
+    def mark_update_result_seen(self, result: dict) -> dict:
+        def acknowledge(saved):
+            if saved.get("install_result") == result:
+                saved["install_result"] = {**result, "seen": True}
+        return self._update_cache(acknowledge)
+
+    def _update_cache(self, modify) -> dict:
         self.config.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (self.config / ".updates.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -122,7 +131,7 @@ class Preferences:
             except MedicError:
                 # This is a replaceable update cache, separate from drive permissions.
                 saved = {}
-            saved.update(changes)
+            modify(saved)
             atomic_json(self.config / "updates.json", saved)
             return saved
 

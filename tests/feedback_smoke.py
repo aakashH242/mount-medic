@@ -6,6 +6,7 @@ import tempfile
 from threading import Event, Thread
 import time
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -261,7 +262,8 @@ def coordinator_feedback(server):
     for result in ({"updated": TARGET_VERSION}, MedicError("Synthetic cancelled install")):
         calls, finished = len(server.calls), []
         with patch("sys.argv", ["updater", TARGET_VERSION, "a" * 64, "--restart", "watch"]), patch("mount_medic.updates.fetch_release", return_value=release), patch("mount_medic.updates.install", side_effect=result if isinstance(result, Exception) else None, return_value=result):
-            thread = Thread(target=lambda: finished.append(updates.main()))
+            args = SimpleNamespace(version=TARGET_VERSION, sha256="a" * 64, restart="watch")
+            thread = Thread(target=lambda: finished.append(updates.run_update(args)))
             thread.start()
             wait_for(lambda: bool(finished), timeout=5)
             thread.join()

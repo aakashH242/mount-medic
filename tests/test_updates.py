@@ -112,7 +112,8 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(result["error"], "Administrator approval was cancelled")
         self.assertIsNone(self.preferences.updates()["error"])
         with patch("os.geteuid", return_value=1000), patch.object(Path, "is_file", return_value=True), patch("mount_medic.updates.download_archive", return_value=Path("/tmp/archive")), patch("mount_medic.updates.stop_desktop", return_value=0), patch("mount_medic.updates.worker_running", return_value=False), patch("mount_medic.installer.elevated", side_effect=lambda command: command), patch("mount_medic.updates.subprocess.run", return_value=Mock(returncode=0)):
-            updates.install(metadata())
+            with patch("mount_medic.updates.source_version", return_value=TARGET_VERSION):
+                updates.install(metadata())
         self.assertIsNone(updates.status(self.preferences)["error"])
 
     def test_clock_changes_cannot_disable_checks(self):
@@ -171,15 +172,21 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual(cli_main(), 2)
             self.assertIn("Package query timed out", json.loads(errors.getvalue())["error"])
             with patch.object(sys, "argv", ["update", TARGET_VERSION, metadata()["sha256"], "--restart", "gui"]), patch.dict(sys.modules, {"mount_medic.notifications": notifications}):
-                self.assertEqual(updates.main(), 2)
+                from types import SimpleNamespace
+                self.assertEqual(updates.run_update(SimpleNamespace(version=TARGET_VERSION, sha256=metadata()["sha256"], restart="gui")), 2)
             self.assertIn("Package query timed out", self.preferences.updates()["install_error"])
-            notifications.desktop_message.assert_called_once_with("Mount Medic update failed", self.preferences.updates()["install_error"], "error")
+            notifications.desktop_message.assert_called_once()
+            title, body, level = notifications.desktop_message.call_args.args
+            self.assertEqual((title, level), ("Mount Medic update failed", "error"))
+            self.assertIn(body, self.preferences.updates()["install_error"])
 
     def test_declined_authentication_restarts_previous_app(self):
         with patch("os.geteuid", return_value=1000), patch.object(Path, "is_file", return_value=True), patch("mount_medic.updates.download_archive", return_value=Path("/tmp/archive")), patch("mount_medic.updates.stop_desktop", return_value=10), patch("mount_medic.updates.worker_running", return_value=False), patch("mount_medic.installer.elevated", side_effect=lambda command: command), patch("mount_medic.updates.subprocess.run", return_value=Mock(returncode=126)) as run, patch("mount_medic.updates.subprocess.Popen") as restart:
             with self.assertRaisesRegex(MedicError, "cancelled"):
                 updates.install(metadata())
-            restart.assert_called_once_with(["/usr/local/bin/mount-medic", "gui"], start_new_session=True)
+            restart.assert_called_once()
+            self.assertEqual(restart.call_args.args[0], ["/usr/local/bin/mount-medic", "gui"])
+            self.assertEqual(json.loads(restart.call_args.kwargs["env"]["MOUNT_MEDIC_UPDATE_RESULT"])["state"], "failed")
             self.assertIs(run.call_args.kwargs["stdout"], sys.stderr, "installer progress would corrupt CLI --json output")
 
     def test_active_desktop_operation_prevents_installation(self):

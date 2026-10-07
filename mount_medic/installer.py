@@ -504,6 +504,7 @@ def build_uid() -> int:
 
 def upgrade_release(args) -> dict:
     from . import __version__
+    print("MM_UPDATE_STAGE:verify", flush=True)
     release = fetch_release(args.upgrade)
     if release["sha256"] != args.sha256 or version(release["version"]) <= version(__version__):
         raise MedicError("The selected release changed or is not newer than the installed version")
@@ -530,6 +531,7 @@ def upgrade_release(args) -> dict:
             raise MedicError("A release must contain source, not build output")
         build.mkdir(mode=0o700)
         os.chown(build, builder, builder)
+        print("MM_UPDATE_STAGE:build", flush=True)
         files = prepare_install(source, builder, {**release, "approved_packages": args.approved_packages})
         launchers = ("usr/local/bin/mount-medic", str(LIBRARY / "worker"), str(LIBRARY / "installer"))
         declaration = files.get(str(LIBRARY / "mount_medic/__init__.py"))
@@ -541,6 +543,7 @@ def upgrade_release(args) -> dict:
         compiled = read_build_output(binary, MAX_ARCHIVE)
         write_file(binary, (compiled, 0o755))
         files[str(LIBRARY / "mount-medic-probe")] = (compiled, 0o755)
+        print("MM_UPDATE_STAGE:install", flush=True)
         result = install_payload(files, Path("/"))
         return {**result, "version": release["version"]}
 

@@ -12,15 +12,18 @@ from mount_medic.protocol import BUS_NAME
 from mount_medic.updates import stop_desktop
 
 CHILD = """
-import sys
+import sys,time
 from mount_medic.desktop import MedicApplication
-from gi.repository import GLib
+from gi.repository import GLib,Gtk
 class App(MedicApplication):
     def start_watching(self): pass
     def refresh(self): pass
+    def do_shutdown(self):
+        if sys.argv[2] == 'slow': time.sleep(7)
+        Gtk.Application.do_shutdown(self)
 app = App()
 app.busy = sys.argv[2] == 'busy'
-GLib.timeout_add_seconds(10, lambda: (app.quit(), False)[1])
+GLib.timeout_add_seconds(20, lambda: (app.quit(), False)[1])
 raise SystemExit(app.run(['mount-medic', sys.argv[1]]))
 """
 
@@ -32,7 +35,7 @@ def exercise():
                              GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
     assert not owned(), "Run this test in a private session bus"
     assert stop_desktop() == 0, "No-running-app case must not open the GUI"
-    for mode, busy, expected in (("gui", "idle", 10), ("watch", "idle", 11), ("watch", "busy", 2)):
+    for mode, busy, expected in (("gui", "idle", 10), ("watch", "idle", 11), ("watch", "busy", 2), ("gui", "slow", 10)):
         print(f"Checking {mode}/{busy}", flush=True)
         with tempfile.TemporaryDirectory() as directory:
             environment = {**os.environ, "XDG_CONFIG_HOME": directory, "XDG_STATE_HOME": directory}
@@ -44,9 +47,12 @@ def exercise():
                         raise AssertionError("Fixture app did not register: " + process.stderr.read().decode())
                     time.sleep(0.05)
                 # Each real CLI/GUI updater has its own GApplication process lifecycle.
+                started = time.monotonic()
                 coordinator = subprocess.run([sys.executable, "-B", "-c",
-                                              "from mount_medic.updates import stop_desktop; raise SystemExit(stop_desktop())"], timeout=8)
+                                              "from mount_medic.updates import stop_desktop; raise SystemExit(stop_desktop())"], timeout=18)
                 assert coordinator.returncode == expected, coordinator.returncode
+                if busy == "slow":
+                    assert time.monotonic() - started >= 6.5, "Slow-shutdown fixture did not delay revocation"
                 if busy == "busy":
                     assert process.poll() is None, "Update interrupted an active operation"
                 else:

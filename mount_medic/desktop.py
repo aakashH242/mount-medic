@@ -3,6 +3,7 @@ from collections import Counter
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -88,6 +89,7 @@ class MedicApplication(Gtk.Application):
         self.update_dialog = None
         self.update_candidate = None
         self.updating = False
+        self.pending_update_result = updates.restart_result()
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -106,6 +108,10 @@ class MedicApplication(Gtk.Application):
 
     def do_command_line(self, command_line):
         arguments = command_line.get_arguments()
+        if "--update-ready-gui" in arguments:
+            return 12 if self.window and self.window.get_visible() and self.window.get_mapped() else 2
+        if "--update-ready-watch" in arguments:
+            return 13 if self.watching and self.background else 2
         if "--quit-for-update" in arguments:
             if self.busy or self.dialog_open or any(window.get_visible() and window.get_modal() for window in Gtk.Window.list_toplevels()):
                 return 2
@@ -125,6 +131,24 @@ class MedicApplication(Gtk.Application):
         self.window.present()
         self.start_watching()
         self.refresh()
+        self.show_update_result()
+
+    def show_update_result(self):
+        if not self.window or not self.window.get_visible():
+            return False
+        try:
+            result = self.pending_update_result or self.preferences.updates().get("install_result")
+            if isinstance(result, dict) and not result.get("seen") and isinstance(result.get("message"), str):
+                self.show_feedback(result["message"], "info" if result.get("state") == "success" else "error")
+                self.pending_update_result = None
+                try:
+                    self.preferences.save_updates({"install_result": {**result, "seen": True}})
+                except (MedicError, OSError) as error:
+                    print(f"Could not mark update result as shown: {error}", file=sys.stderr)
+                return True
+        except (MedicError, OSError) as error:
+            self.show_error(str(error))
+        return False
 
     def build_window(self):
         self.window = Gtk.ApplicationWindow(application=self, title="Mount Medic")
@@ -819,7 +843,8 @@ class MedicApplication(Gtk.Application):
                 return True
             self.updating = False
             if process.returncode:
-                self.show_error("Update failed or was cancelled. See Settings → Updates and " + str(self.preferences.state / "update.log"))
+                if not self.show_update_result():
+                    self.show_error("Update failed or was cancelled. See Settings → Updates and " + str(self.preferences.state / "update.log"))
             if self.update_dialog:
                 self.update_dialog.set_status(updates.status(self.preferences), self.update_checking)
             return False

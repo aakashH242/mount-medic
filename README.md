@@ -172,6 +172,8 @@ Mount Medic checks for updates every hour while it is running, including when th
 
 You can also open **Settings → Updates** to check now, read what's new, or install a version you previously ignored. If you're offline, try again when connected. Quitting the app pauses automatic checks until you start it again.
 
+When you install an update, a small window shows its progress through downloading, installation, and restarting. Mount Medic reopens afterward and shows the result inside the app. If installation fails safely, it tells you that your current version was kept.
+
 Installation asks for administrator access and restarts the app afterward. Let any drive check or repair finish first. Your drive permissions, history, preferences, and login startup choice stay as they are. If extra packages are needed, you'll see them before approving; on Arch this includes a full system upgrade.
 
 **Using v1.0.0?** Run the installer once more to get the updater. After that, you can update from the app or [command line](#update-the-app).

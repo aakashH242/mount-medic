@@ -9,6 +9,7 @@ python3 -m compileall -q mount_medic
 dbus-run-session -- python3 tests/authorization_smoke.py
 dbus-run-session -- python3 tests/notification_smoke.py
 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/update_desktop_smoke.py
+dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/update_progress_smoke.py "${MM_ARTIFACTS:-/tmp}/update-progress"
 if [ "${MM_UPDATE_INSTALL_SMOKE:-0}" = 1 ]; then
     python3 tests/update_install_smoke.py
 fi

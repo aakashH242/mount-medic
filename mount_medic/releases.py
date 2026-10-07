@@ -3,6 +3,7 @@ import hashlib
 import gzip
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -116,6 +117,14 @@ def download_archive(release: dict, directory: Path) -> Path:
     return path
 
 
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def create_public_directory(path: Path) -> None:
     # Umask must not hide source/app directories; existing private parents stay private.
     missing = []
@@ -126,6 +135,8 @@ def create_public_directory(path: Path) -> None:
     for current in reversed(missing):
         current.mkdir(mode=0o755)
         current.chmod(0o755)
+        sync_directory(current)
+        sync_directory(current.parent)
 
 
 def extract_archive(archive: Path, destination: Path, release: dict) -> Path:

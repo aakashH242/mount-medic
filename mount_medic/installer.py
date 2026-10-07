@@ -17,7 +17,7 @@ from .dependencies import PACKAGES, dependency_command, family, missing_packages
 from .model import MedicError
 from .protocol import BUS_NAME
 from .storage import Preferences, atomic_json, notification_seconds, read_json
-from .releases import ReleaseError, create_public_directory, extract_archive, fetch_release, verify_archive, version, MAX_ARCHIVE
+from .releases import ReleaseError, create_public_directory, extract_archive, fetch_release, sync_directory, verify_archive, version, MAX_ARCHIVE
 
 LIBRARY = Path("usr/local/lib/mount-medic")
 MANIFEST = LIBRARY / "manifest.json"
@@ -112,14 +112,6 @@ def safe_target(root: Path, relative: str) -> Path:
     return path
 
 
-def sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def write_file(path: Path, contents: tuple) -> None:
     content, mode = contents
     create_public_directory(path.parent)
@@ -177,7 +169,8 @@ def recover_install(root: Path) -> dict:
             target = safe_target(root, relative)
             if old is None:
                 target.unlink(missing_ok=True)
-                sync_directory(target.parent)
+                if target.parent.exists():
+                    sync_directory(target.parent)
             else:
                 backup = safe_target(root, str(TRANSACTION / "backup" / relative))
                 write_file(target, (backup.read_bytes(), old))

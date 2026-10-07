@@ -23,7 +23,7 @@ class Notifications:
         self.proxy.connect("g-signal", self.signal)
         self.proxy.connect("notify::g-name-owner", self.owner_changed)
 
-    def show(self, key, title, body, *, actions=()):
+    def show(self, key, title, body, *, actions=(), on_sent=None):
         if key in self.preferences.ignored():
             return
         self.close(key)
@@ -48,6 +48,8 @@ class Notifications:
                     self.close(key)
                     return False
                 entry["timer"] = GLib.timeout_add(seconds * 1000, expire)
+                if on_sent:
+                    on_sent()
             except GLib.Error as error:
                 if self.active.get(key) is entry:
                     self.active.pop(key)

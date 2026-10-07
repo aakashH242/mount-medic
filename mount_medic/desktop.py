@@ -544,11 +544,11 @@ class MedicApplication(Gtk.Application):
         else:
             print(message)
 
-    def notify(self, key, title, body, *, actions=()):
+    def notify(self, key, title, body, *, actions=(), on_sent=None):
         try:
             if self.notifications is None:
                 self.notifications = Notifications(self.preferences, self.notification_action, self.notification_error)
-            self.notifications.show(key, title, body, actions=actions)
+            self.notifications.show(key, title, body, actions=actions, on_sent=on_sent)
         except (GLib.Error, MedicError, OSError) as error:
             self.notification_error(str(error))
 
@@ -654,23 +654,30 @@ class MedicApplication(Gtk.Application):
             self.update_dialog.set_status(updates.status(self.preferences), True)
 
         def fetch():
+            succeeded = False
             try:
                 updates.check(self.preferences)
+                succeeded = True
             except (MedicError, OSError):
                 pass  # Automatic failures remain quiet; the Updates dialog shows the saved error.
-            GLib.idle_add(completed)
+            GLib.idle_add(completed, succeeded)
 
-        def completed():
+        def completed(succeeded):
             self.update_checking = False
             result = updates.status(self.preferences)
             if self.update_dialog:
                 self.update_dialog.set_status(result)
-            if not result["error"] and result["available"]:
+            if succeeded and result["available"]:
                 self.update_candidate = result["release"]
                 if not manual and updates.notification_due(self.preferences, self.update_candidate):
+                    def delivered():
+                        if self.update_candidate["version"] == result["available"]:
+                            try:
+                                self.preferences.save_updates({"notified": result["available"]})
+                            except (MedicError, OSError) as error:
+                                self.notification_error(str(error))
                     self.notify("update:" + result["available"], f"Mount Medic {result['available']} is available",
-                                f"Installed: {result['installed']}", actions=updates.UPDATE_ACTIONS)
-                    self.preferences.save_updates({"notified": result["available"]})
+                                f"Installed: {result['installed']}", actions=updates.UPDATE_ACTIONS, on_sent=delivered)
             return False
 
         threading.Thread(target=fetch, name="release-check", daemon=True).start()

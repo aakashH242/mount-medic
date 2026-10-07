@@ -228,8 +228,9 @@ class RecoveryTests(unittest.TestCase):
         old = {str(LIBRARY / "worker"): (b"old", 0o755),
                str(LIBRARY / "mount_medic/obsolete.py"): (b"removed", 0o644),
                "usr/local/bin/mount-medic": (b"old launcher", 0o755)}
-        new = {str(LIBRARY / "worker"): (b"new", 0o755), "usr/local/bin/mount-medic": (b"new launcher", 0o755)}
-        for point in ("external", "exchange", "commit"):
+        new = {str(LIBRARY / "worker"): (b"new", 0o755), "usr/local/bin/mount-medic": (b"new launcher", 0o755),
+               "usr/local/share/applications/io.github.aakashH242.MountMedic.desktop": (b"desktop", 0o644)}
+        for point in ("journal", "external", "exchange", "commit"):
             with self.subTest(point=point), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 with patch("mount_medic.installer.payload", return_value=old):
@@ -244,7 +245,7 @@ from pathlib import Path
 from unittest.mock import patch
 from mount_medic import installer
 root = Path(sys.argv[1]); point = sys.argv[2]
-new = {str(installer.LIBRARY / 'worker'): (b'new', 0o755), 'usr/local/bin/mount-medic': (b'new launcher', 0o755)}
+new = {str(installer.LIBRARY / 'worker'): (b'new', 0o755), 'usr/local/bin/mount-medic': (b'new launcher', 0o755), 'usr/local/share/applications/io.github.aakashH242.MountMedic.desktop': (b'desktop', 0o644)}
 write = installer.write_file; exchange = installer.exchange_directories; atomic = installer.atomic_json
 def written(path, content):
     write(path, content)
@@ -254,6 +255,7 @@ def exchanged(first, second):
     if point == 'exchange': os._exit(99)
 def committed(path, data):
     atomic(path, data)
+    if point == 'journal' and path.name == 'status.json' and not data.get('committed'): os._exit(99)
     if point == 'commit' and data.get('committed'): os._exit(99)
 with patch.object(installer, 'payload', return_value=new), patch.object(installer, 'write_file', written), patch.object(installer, 'exchange_directories', exchanged), patch.object(installer, 'atomic_json', committed):
     installer.install_tree(root, root)
@@ -268,6 +270,7 @@ with patch.object(installer, 'payload', return_value=new), patch.object(installe
                 if point != "commit":
                     self.assertEqual(read_json(root / LIBRARY / "manifest.json"), old_manifest)
                 self.assertEqual((root / LIBRARY / "mount_medic/obsolete.py").exists(), point != "commit")
+                self.assertEqual((root / "usr/local/share/applications/io.github.aakashH242.MountMedic.desktop").exists(), point == "commit")
                 self.assertEqual(history.read_text(), '{"permissions":"preserved"}')
                 self.assertFalse((root / TRANSACTION).exists())
 

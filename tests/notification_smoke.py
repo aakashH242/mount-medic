@@ -114,12 +114,14 @@ def exercise():
     preferences.unignore(key)
 
     server.mode = "delay"
-    notifications.show(key, "Discovered", "Drive", actions=DISCOVERY_ACTIONS)
+    delivered = []
+    notifications.show(key, "Discovered", "Drive", actions=DISCOVERY_ACTIONS, on_sent=lambda: delivered.append(key))
     wait_for(lambda: bool(server.pending))
     notifications.close(key)
     server.pending.pop().return_value(GLib.Variant("(u)", (4,)))
     wait_for(lambda: 4 in server.closed)
     assert not notifications.active, "late replies must not resurrect a cancelled notification"
+    assert not delivered, "cancelled notifications must not acknowledge delivery"
 
     server.mode = "fail"
     notifications.show(key, "Discovered", "Drive")
@@ -158,10 +160,22 @@ def exercise():
     owner = replacement.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                                       GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 2000, None)
     assert not owner.unpack()[0], "Error reporting took the application name and could block GUI restart"
+    previous_errors = len(errors)
+    replacement.mode = "fail"
+    update_key = "update:1.2.0"
+    acknowledge = lambda: preferences.save_updates({"notified": "1.2.0"})
+    notifications.show(update_key, "Update available", "Install or ignore", on_sent=acknowledge)
+    wait_for(lambda: len(errors) > previous_errors)
+    assert preferences.updates().get("notified") is None
+    replacement.mode = "reply"
+    notifications.show(update_key, "Update available", "Install or ignore", on_sent=acknowledge)
+    wait_for(lambda: preferences.updates().get("notified") == "1.2.0")
+    notifications.close_all()
     replacement.release()
     wait_for(lambda: notifications.owner is None)
+    previous_errors = len(errors)
     notifications.show(key, "Discovered", "Drive")
-    wait_for(lambda: len(errors) == 2)
+    wait_for(lambda: len(errors) > previous_errors)
     assert not notifications.active
     print("PASS: native D-Bus payload/actions, escaping, dismissal, real expiry, persistent ignore, late replies, failure, daemon restart and updater errors without application ownership")
 

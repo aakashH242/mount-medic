@@ -42,11 +42,26 @@ def update_flows(app, output, sent):
     with patch("mount_medic.updates.fetch_release", return_value=release):
         app.check_updates()
         settle_until(lambda: not app.update_checking)
-    sent.assert_called_once_with("update:" + TARGET_VERSION, f"Mount Medic {TARGET_VERSION} is available", f"Installed: {__version__}", actions=updates.UPDATE_ACTIONS)
+    assert sent.call_count == 1
+    assert sent.call_args.args == ("update:" + TARGET_VERSION, f"Mount Medic {TARGET_VERSION} is available", f"Installed: {__version__}")
+    assert sent.call_args.kwargs["actions"] == updates.UPDATE_ACTIONS
+    assert app.preferences.updates()["notified"] is None, "a failed delivery must remain eligible for retry"
+    app.preferences.save_updates({"last_attempt": 0, "install_error": "Administrator authentication cancelled"})
+    with patch("mount_medic.updates.fetch_release", return_value=release):
+        app.check_updates()
+        settle_until(lambda: not app.update_checking)
+    assert sent.call_count == 2, "a previous install failure must not suppress successful check notifications"
+    sent.call_args.kwargs["on_sent"]()
+    assert app.preferences.updates()["notified"] == TARGET_VERSION
+    app.preferences.save_updates({"last_attempt": 0})
+    with patch("mount_medic.updates.fetch_release", return_value=release):
+        app.check_updates()
+        settle_until(lambda: not app.update_checking)
+    assert sent.call_count == 2, "successful delivery must suppress repeated hourly alerts"
     with patch("mount_medic.updates.fetch_release", return_value=release):
         app.check_updates(manual=True)
         settle_until(lambda: not app.update_checking)
-    assert sent.call_count == 1, "manual checks must not repeat a dismissed update alert"
+    assert sent.call_count == 2, "manual checks must not repeat a dismissed update alert"
     with patch.object(Path, "is_file", return_value=True), patch("mount_medic.desktop.subprocess.Popen") as spawn:
         spawn.return_value.poll.return_value = None
         dialog.install.clicked()

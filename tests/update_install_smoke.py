@@ -17,6 +17,23 @@ from scripts.release import package
 from update_fixture import TARGET_VERSION
 
 
+def exercise_launcher_guard(root, uid):
+    root.chmod(0o755)
+    marker = root / "launcher-transaction"
+    marker.mkdir(mode=0o700)
+    atomic_json(marker / "status.json", {"committed": False})
+    guard = installer.MAINTENANCE.replace("/usr/local/lib/.mount-medic-transaction", str(marker))
+    command = [sys.executable, "-IB", "-c", guard + "\nprint('started')"]
+    blocked = subprocess.run(command, user=uid, group=uid, extra_groups=[], cwd="/tmp", capture_output=True, text=True)
+    assert blocked.returncode == 1 and "--recover" in blocked.stderr and "Traceback" not in blocked.stderr, blocked
+    (marker / "status.json").unlink()
+    staging = subprocess.run(command, user=uid, group=uid, extra_groups=[], cwd="/tmp", capture_output=True, text=True)
+    assert staging.returncode == 1 and "--recover" in staging.stderr, staging
+    marker.rmdir()
+    ready = subprocess.run(command, user=uid, group=uid, extra_groups=[], cwd="/tmp", capture_output=True, text=True)
+    assert ready.returncode == 0 and ready.stdout.strip() == "started", ready
+
+
 def exercise():
     assert os.geteuid() == 0
     checkout = Path(__file__).resolve().parent.parent
@@ -65,7 +82,8 @@ def exercise():
                     pass
                 else:
                     raise AssertionError("corrupt archive accepted by privileged helper")
-        print("PASS: protected archive verified, source built with an isolated UID, complete root-owned install, settings preserved, corruption refused")
+        exercise_launcher_guard(root, build_call.kwargs["user"])
+        print("PASS: protected archive verified, isolated build UID, complete root-owned install, settings preserved, corruption refused, normal-user launchers handle private recovery/staging markers")
 
 
 if __name__ == "__main__":

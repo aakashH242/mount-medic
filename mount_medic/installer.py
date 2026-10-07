@@ -39,8 +39,9 @@ sys.path.insert(0, '/usr/local/lib/mount-medic')
 from mount_medic.{module} import main
 raise SystemExit(main())
 """
+# Desktop users can stat the transaction directory but cannot read its private journal.
 MAINTENANCE = """from pathlib import Path
-if Path('/usr/local/lib/.mount-medic-transaction/status.json').exists():
+if Path('/usr/local/lib/.mount-medic-transaction').exists():
     raise SystemExit('Mount Medic update was interrupted. Run: sudo /usr/local/lib/mount-medic/installer --recover')"""
 
 

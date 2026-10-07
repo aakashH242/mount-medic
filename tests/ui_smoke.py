@@ -383,13 +383,14 @@ def drive_flows(app, volume, output, sent):
         assert [column.get_title() for column in table.get_columns()] == ["Field", "Value"]
         cells = []
         def collect(model, path, iterator):
-            cells.append(tuple(model[iterator]))
+            cells.append((model[iterator][0], model[iterator][1]))
             return False
         table.get_model().foreach(collect)
         assert ("Read only", "Yes") in cells and ("Clean", "No") in cells
         assert ("Warnings", "None") in cells
         assert ("Last checked", checked_time(1791277200)) in cells
-        assert any(name == "Size" and "GiB" in value and "bytes" in value for name, value in cells)
+        assert any(name == "Capacity" and "GB" in value and "bytes" in value for name, value in cells)
+        assert cells[0][0] == "Next steps"
         assert ("Filesystem UUID", volume.identity.uuid) in cells
         capture(dialog, output.with_stem(output.stem + "-diagnostics"))
         dialog.resize(520, 380)
@@ -612,7 +613,7 @@ def main():
     capture(app.window, output)
     assert app.more_button.get_popup().get_children() == [app.buttons[name] for name in ("Mount", "Unmount and inspect", "Ignore This Drive", "Diagnostics")]
     app.identity_expander.set_expanded(True)
-    assert games.key in app.identity_details.get_text()
+    assert games.key == app.identity_fields["Volume ID"].get_text()
     app.identity_expander.set_expanded(False)
     app.window.resize(640, 640)
     capture(app.window, output.with_stem(output.stem + "-compact"))
@@ -642,8 +643,10 @@ def main():
     long_name["volume"]["label"] = "<b>Untrusted & long name</b> " * 12
     app.render([long_name])
     assert "&lt;b&gt;" in app.store[0][1]
-    assert long_name["volume"]["label"] in app.identity_details.get_text()
+    assert long_name["volume"]["label"] == app.identity_fields["Drive"].get_text()
+    app.identity_expander.set_expanded(True)
     capture(app.window, output.with_stem(output.stem + "-long-label"))
+    app.identity_expander.set_expanded(False)
     drive_flows(app, removable, output, sent)
     update_flows(app, output, sent)
     window_lifecycle(app, tray_host)

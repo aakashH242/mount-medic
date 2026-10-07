@@ -5,6 +5,7 @@ from . import appearance
 from .engine import REPAIR_NOTICE
 from .feedback import Toast
 from .storage import MAX_NOTIFICATION_SECONDS, Preferences
+from .usage import GB, storage_summary
 
 
 class UpdatesDialog(Gtk.Dialog):
@@ -68,8 +69,7 @@ class UpdatesDialog(Gtk.Dialog):
 
 def drive_description(volume: dict) -> str:
     identity = volume.get("identity", {})
-    size = identity.get("size", 0) / (1024 ** 3)
-    return (f"{volume.get('label') or 'NTFS drive'} · {size:.1f} GiB\n"
+    return (f"{volume.get('label') or 'NTFS drive'}\nStorage: {storage_summary(volume)}\n"
             f"Device: {volume.get('device') or 'Disconnected'}\n"
             f"Filesystem UUID: {identity.get('uuid', 'Unknown')}\n"
             f"Disk identity: {identity.get('hardware') or 'Unavailable'}")
@@ -84,31 +84,43 @@ def drive_diagnostics(parent, report):
     area = dialog.get_content_area()
     area.set_border_width(16)
     area.set_spacing(12)
+    header = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    header.get_style_context().add_class("diagnostic-heading")
     heading = appearance.label(report["volume"].get("label") or "NTFS drive", "section-title")
     heading.set_selectable(True)
-    area.pack_start(heading, False, False, 0)
-    model = Gtk.TreeStore(str, str)
+    header.pack_start(heading, False, False, 0)
+    summary = appearance.label(storage_summary(report["volume"]), "usage-summary")
+    summary.set_selectable(True)
+    header.pack_start(summary, False, False, 0)
+    meter = appearance.storage_meter()
+    appearance.update_storage_meter(meter, report["volume"])
+    header.pack_start(meter, False, False, 0)
+    area.pack_start(header, False, False, 0)
+    model = Gtk.TreeStore(str, str, int)
     names = {"id": "Volume ID", "uuid": "Filesystem UUID", "hardware": "Disk identity",
              "readonly": "Read-only", "checked_at": "Last checked", "monitor": "Background checks",
              "auto_repair": "Automatic repair", "auto_mount": "Automatic mounting",
-             "size": "Size", "start": "Partition start (sectors)", "devnum": "Device number"}
+             "size": "Capacity", "start": "Partition start (sectors)", "devnum": "Device number",
+             "usage": "Storage usage", "total": "Total", "used": "Used", "free": "Free", "free_percent": "Free space"}
 
     def add_fields(container, value):
         entries = value.items() if isinstance(value, dict) else enumerate(value, 1)
         for key, item in entries:
             title = names.get(key, str(key).replace("_", " ").capitalize())
             if isinstance(item, (dict, list)) and item:
-                group = model.append(container, [title, ""])
+                group = model.append(container, [title, "", Pango.Weight.SEMIBOLD])
                 add_fields(group, item)
             else:
-                model.append(container, [title, diagnostic_value(key, item)])
+                model.append(container, [title, diagnostic_value(key, item), Pango.Weight.NORMAL])
 
-    add_fields(None, report)
+    model.append(None, ["Next steps", diagnostic_value("next_steps", report.get("next_steps")), Pango.Weight.SEMIBOLD])
+    add_fields(None, {key: value for key, value in report.items() if key != "next_steps"})
     tree = Gtk.TreeView(model=model, enable_search=True)
+    tree.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     tree.get_accessible().set_name("Drive diagnostic fields and values")
     tree.set_tooltip_column(1)
     field = Gtk.CellRendererText(wrap_width=180, wrap_mode=Pango.WrapMode.WORD_CHAR, xpad=12, ypad=8)
-    column = Gtk.TreeViewColumn("Field", field, text=0)
+    column = Gtk.TreeViewColumn("Field", field, text=0, weight=2)
     column.set_min_width(220)
     tree.append_column(column)
     value = Gtk.CellRendererText(wrap_width=360, wrap_mode=Pango.WrapMode.WORD_CHAR, xpad=12, ypad=8)
@@ -138,12 +150,16 @@ def diagnostic_value(field, value):
         return "Yes"
     if value is False:
         return "No"
+    if field == "usage" and not value:
+        return "Unavailable"
     if value in (None, "", [], {}):
         return "None"
     if field == "checked_at":
         return appearance.checked_time(value)
-    if field == "size" and isinstance(value, (int, float)):
-        return f"{value / (1024 ** 3):.1f} GiB ({value:,} bytes)"
+    if field in {"size", "total", "used", "free"} and isinstance(value, (int, float)):
+        return f"{value / GB:.1f} GB ({value:,} bytes)"
+    if field == "free_percent" and isinstance(value, (int, float)):
+        return f"{value:.1f}%"
     if field == "state":
         return str(value).replace("_", " ").capitalize()
     return str(value)

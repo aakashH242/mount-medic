@@ -44,6 +44,14 @@
 }
 .mount-medic .inspector { padding: 16px; }
 .mount-medic .permissions { margin-top: 6px; }
+.mount-medic .drive-details { padding: 12px 16px; border: 1px solid @medic_border; border-radius: 6px; background-color: mix(@theme_base_color, @theme_bg_color, 0.45); }
+.mount-medic .detail-label { font-weight: 600; }
+.mount-medic .detail-name { font-weight: 700; }
+.mount-medic .detail-id { font-family: monospace; }
+.mount-medic .usage-summary { font-weight: 500; }
+.mount-medic .diagnostic-heading { padding: 12px; border: 1px solid @medic_border; border-radius: 6px; background-color: @theme_base_color; }
+.mount-medic .storage-meter trough { min-height: 6px; border-radius: 3px; }
+.mount-medic .storage-meter progress { min-height: 6px; border-radius: 3px; background-color: @medic_accent; }
 .mount-medic .status-line { font-size: 0.95em; }
 .mount-medic button.primary-action {
   background-image: none;

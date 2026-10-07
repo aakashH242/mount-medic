@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 from dataclasses import replace
+from datetime import datetime
 import sys
 import tempfile
 from unittest.mock import patch
@@ -71,6 +72,7 @@ def cycle_results(app, volume):
     assert current["volume"]["mounts"] == ["/fixture"], "Pre-repair discovery replaced the mounted result"
     assert current["volume"]["usage"] == mounted.usage
     assert current["checked_at"] == repaired["checked_at"]
+    assert app.store[0][3] == checked_time(repaired["checked_at"])
     assert current["settings"] == row["settings"]
     absent = {"volume": {"id": volume.key}, "state": "absent", "actions": [],
               "checked_at": 1791277400, "next_steps": "Reconnect this enrolled volume."}
@@ -84,6 +86,13 @@ def cycle_results(app, volume):
     assert current["volume"]["label"] == volume.label
     assert not current["volume"]["mounts"] and current["volume"]["usage"] is None
     assert current["checked_at"] == absent["checked_at"]
+    monitored = {**row, "settings": {"monitor": True, "auto_repair": False, "auto_mount": False}}
+    automatic = {**diagnosis(volume, "clean"), "checked_at": 1791277500}
+    with patch("mount_medic.client.list_volumes", return_value=[monitored]), \
+         patch("mount_medic.client.call", return_value=[automatic]):
+        app.cycle()
+        settle_until(lambda: not app.busy)
+    assert app.store[0][3] == checked_time(automatic["checked_at"]), "Automatic checks must update Last check"
     print("PASS: automatic recovery keeps fresh mounted usage; disconnect during check retains drive identity")
 
 
@@ -111,6 +120,12 @@ def usage_views(app, volume, output):
         try:
             tree = next(widget for widget in widgets(dialog) if isinstance(widget, Gtk.TreeView))
             model = tree.get_model()
+            assert all(column.get_resizable() for column in tree.get_columns())
+            value_column = tree.get_column(1)
+            value_column.set_fixed_width(300)
+            settle()
+            assert value_column.get_width() >= 300
+            value_column.set_fixed_width(220)
             assert model[0][0] == "Next steps" and model[0][1] == report["next_steps"]
             values = []
             model.foreach(lambda model, path, row: values.append((model[row][0], model[row][1])) and False)
@@ -144,6 +159,33 @@ def usage_views(app, volume, output):
     print("PASS: shared GB/percentage in table, details and diagnostics; Next steps first; unknown usage explicit")
 
 
+def table_columns(app, volume, output):
+    for hour, suffix in ((0, "12:05 AM"), (12, "12:05 PM"), (23, "11:05 PM")):
+        assert checked_time(datetime(2026, 10, 7, hour, 5).timestamp()) == f"07 Oct {suffix}"
+    displayed = replace(volume, mounts=["/fixture"], usage=filesystem_usage(500 * GB, 125 * GB))
+    app.render([{**diagnosis(displayed, "mounted_rw"), "checked_at": datetime(2026, 10, 7, 13, 5).timestamp()}])
+    tree = app.selection.get_tree_view()
+    columns = tree.get_columns()
+    assert all(column.get_resizable() for column in columns)
+    status = columns[2]
+    renderer = status.get_cells()[0]
+    app.store[0][2] = "Available / mounted read-only"
+    status.set_fixed_width(120)
+    settle()
+    status.cell_set_cell_data(app.store, app.store.get_iter_first(), False, False)
+    assert status.get_width() == 120
+    assert renderer.get_property("wrap-width") == 96
+    assert renderer.get_preferred_height_for_width(tree, 120)[0] > renderer.get_preferred_height_for_width(tree, 1000)[0]
+    assert columns[3].get_cells()[0].get_property("xpad") == 20
+    columns[3].cell_set_cell_data(app.store, app.store.get_iter_first(), False, False)
+    assert columns[3].get_width() >= columns[3].get_cells()[0].get_preferred_width(tree)[0]
+    capture(app.window, output / "drives-resized-status.png")
+    status.set_fixed_width(240)
+    settle()
+    assert status.get_width() == 240 and renderer.get_property("wrap-width") == 216
+    print("PASS: resizable drive columns, Status wraps at resized width, Last check AM/PM and padding")
+
+
 def main(output):
     output.mkdir(parents=True, exist_ok=True)
     if os.environ.get("MM_UI_FONT"):
@@ -156,9 +198,73 @@ def main(output):
         history(app, volume)
         cycle_results(app, volume)
         usage_views(app, volume, output)
+        table_columns(app, volume, output)
+        permissions_view(app, volume, output)
     finally:
         app.window.destroy()
         app.pool.shutdown()
+
+
+def permissions_view(app, volume, output):
+    settings = {"monitor": True, "auto_repair": True, "auto_mount": True}
+    displayed = replace(volume, label="Games_Ext", mounts=["/fixture"],
+                        usage=filesystem_usage(500_100_000_000, 228_100_000_000)).as_dict()
+    failures = []
+    for response in (Gtk.ResponseType.CANCEL, Gtk.ResponseType.OK):
+        if response == Gtk.ResponseType.OK:
+            displayed["label"] = "<b>Games & backup</b> " * 4
+            displayed["identity"]["hardware"] = "eui." + "0123456789abcdef" * 4
+        def inspect():
+            dialog = next((window for window in Gtk.Window.list_toplevels() if window.get_title() == "Drive permissions"), None)
+            if dialog is None:
+                return True
+            try:
+                grid = next(item for item in widgets(dialog) if isinstance(item, Gtk.Grid) and item.get_style_context().has_class("drive-details"))
+                for index, (title, text) in enumerate(dialogs.drive_fields(displayed).items()):
+                    value = grid.get_child_at(1, index)
+                    assert value.get_text() == text and value.get_selectable()
+                    assert value.get_accessible().get_name() == f"{title}: {text}"
+                labels = [item for item in widgets(dialog) if isinstance(item, Gtk.Label)]
+                notice = next(item for item in labels if item.get_text().startswith("Repair resets"))
+                assert "interrupted writes may be lost" in notice.get_text()
+                assert "Back up first" in notice.get_text() and "cannot replace Windows chkdsk" in notice.get_text()
+                assert notice.get_accessible().get_description() == dialogs.REPAIR_NOTICE
+                assert any(item.get_text() == "Back up before repair" for item in labels)
+                auth = next(item for item in labels if item.get_text() == "Applying changes requires administrator authentication.")
+                assert auth.get_style_context().has_class("permission-auth")
+                capture(dialog, output / ("permissions.png" if response == Gtk.ResponseType.CANCEL else "permissions-long.png"))
+                dialog.resize(520, dialog.get_size()[1])
+                settle()
+                monitor = dialog.get_display().get_monitor_at_window(dialog.get_window()).get_workarea()
+                assert dialog.get_allocated_height() <= monitor.height, ("Permission dialog exceeds the screen", dialog.get_allocated_height(), monitor.height)
+                scroll = grid.get_ancestor(Gtk.ScrolledWindow)
+                for item in (grid, notice, auth):
+                    x, y = item.translate_coordinates(dialog, 0, 0)
+                    assert x >= 0 and x + item.get_allocated_width() <= dialog.get_allocated_width()
+                adjustment = scroll.get_vadjustment()
+                adjustment.set_value(adjustment.get_upper() - adjustment.get_page_size())
+                settle()
+                x, y = auth.translate_coordinates(dialog, 0, 0)
+                assert y >= 0 and y + auth.get_allocated_height() <= dialog.get_allocated_height()
+                capture(dialog, output / ("permissions-compact.png" if response == Gtk.ResponseType.CANCEL else "permissions-long-compact.png"))
+                checks = {item.get_label(): item for item in widgets(dialog) if isinstance(item, Gtk.CheckButton)}
+                assert all(item.get_active() for item in checks.values())
+                checks["Background checks"].set_active(False)
+                for name in ("Automatic repair", "Automatic mounting"):
+                    assert not checks[name].get_active() and not checks[name].get_sensitive()
+            except Exception as error:
+                failures.append(error)
+            finally:
+                dialog.response(response)
+            return False
+        GLib.timeout_add(100, inspect)
+        result = dialogs.drive_permissions(app.window, displayed, settings)
+        assert not failures, failures
+        expected = None if response == Gtk.ResponseType.CANCEL else dict.fromkeys(settings, False)
+        assert result == expected
+        assert settings == dict.fromkeys(settings, True), "Dialog mutated caller settings"
+    assert not failures, failures
+    print("PASS: styled copyable permissions summary/warnings, compact literal long values, cancel/apply and permission dependencies")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1 — 7 October 2026
+
+Mount Medic 1.3.1 makes drive permissions and tables easier to read.
+
+- Read drive information in a neatly arranged panel when changing permissions, with values you can select and copy.
+- See repair guidance in a clear warning panel, with the administrator access note below it. Long drive names and large text scroll while Cancel and Apply stay visible.
+- Drag column dividers to resize the drive list and diagnostics tables. Status text wraps to fit its column.
+- See AM/PM in check times, with more space around the Last check column.
+
+Automatic and manual checks both update the last check time. Your saved drive permissions, preferences and check history are preserved.
+
+To update, open **Settings → Updates** or run `mount-medic update install`.
+
 ## 1.3.0 — 7 October 2026
 
 Mount Medic 1.3.0 makes drive information easier to read and keeps your last check visible.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 — 7 October 2026
+
+Mount Medic 1.3.0 makes drive information easier to read and keeps your last check visible.
+
+- See used space, total space and the percentage free in the drive list, Drive details and Drive diagnostics. A small usage bar appears in details and diagnostics. Unmounted drives show their capacity with “Usage unavailable.”
+- Keep the last check time when adding or removing monitored drives, changing permissions, refreshing the list, or restarting after an update.
+- Read Drive details in a neatly arranged panel. Select and copy individual values, including device names and drive IDs.
+- See **Next steps** first in diagnostics, with clearer headings and readable values that wrap in smaller windows.
+- Fixed automatic recovery showing old drive information after successfully repairing and mounting a drive. If a drive disconnects during a check, its name and identity are kept and old usage figures are cleared.
+
+To update, open **Settings → Updates** or run `mount-medic update install`. Your saved drive permissions, preferences and check history are preserved.
+
 ## 1.2.1 — 7 October 2026
 
 Mount Medic 1.2.1 makes app updates easier to follow.

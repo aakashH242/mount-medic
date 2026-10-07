@@ -38,6 +38,7 @@ class Volume:
     supported: bool = True
     duplicate: bool = False
     mount_readonly: bool = False
+    usage: dict | None = None
 
     @property
     def key(self) -> str:

@@ -5,8 +5,9 @@ import re
 
 from .commands import executable, json_command, run
 from .model import Identity, MedicError, Volume
+from .usage import filesystem_usage
 
-LSBLK_COLUMNS = "PATH,TYPE,FSTYPE,UUID,PARTUUID,SIZE,START,WWN,SERIAL,MODEL,TRAN,MAJ:MIN,MOUNTPOINTS,RO"
+LSBLK_COLUMNS = "PATH,TYPE,FSTYPE,UUID,PARTUUID,SIZE,START,WWN,SERIAL,MODEL,TRAN,MAJ:MIN,MOUNTPOINTS,RO,FSSIZE,FSUSED"
 
 
 class VolumeUnavailable(MedicError):
@@ -64,6 +65,7 @@ def parse_devices(tree: list[dict]) -> list[Volume]:
                             str(node.get("maj:min") or ""),
                             [value for value in node.get("mountpoints", []) or [] if value],
                             bool(node.get("ro")), supported)
+            volume.usage = filesystem_usage(node.get("fssize"), node.get("fsused")) if volume.mounts else None
             found[volume.device] = volume
         for child in node.get("children", []):
             visit(child, lineage)

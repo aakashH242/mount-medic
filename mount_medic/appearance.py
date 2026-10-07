@@ -7,6 +7,7 @@ import tempfile
 from gi.repository import Gdk, Gtk, Pango
 
 from .protocol import BUS_NAME
+from .usage import storage_summary, volume_usage
 
 ASSETS = Path(__file__).with_name("assets")
 
@@ -59,6 +60,23 @@ def label(text: str, style: str = "") -> Gtk.Label:
     if style:
         widget.get_style_context().add_class(style)
     return widget
+
+
+def storage_meter() -> Gtk.ProgressBar:
+    meter = Gtk.ProgressBar()
+    meter.set_no_show_all(True)
+    meter.get_style_context().add_class("storage-meter")
+    return meter
+
+
+def update_storage_meter(meter, volume):
+    usage = volume_usage(volume)
+    meter.set_visible(usage is not None)
+    if usage:
+        meter.set_fraction(usage["used"] / usage["total"])
+    description = "Storage used: " + storage_summary(volume)
+    meter.set_tooltip_text(description)
+    meter.get_accessible().set_name(description)
 
 
 def icon_button(icon: str, title: str) -> Gtk.Button:

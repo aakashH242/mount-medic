@@ -57,6 +57,8 @@ On Alpine/OpenRC, desktop authorization requires `polkit-elogind`, a running `el
 
 Open **Mount Medic** from your application menu and select a drive. Enable monitoring if you want background checks; automatic repair and mounting are separate choices and are off by default.
 
+The drive list shows used and total space, the percentage free, and the last check time. Expand **Drive details** to copy a device name or drive ID, or open **More → Diagnostics** to see the result and next steps. Usage figures are available while a drive is mounted.
+
 Enter your administrator password once when changing drive permissions or requesting a repair. Approval lasts for **1 hour**, or until you quit Mount Medic. Choose **1–24 hours** during setup or in **Settings → Security**. Closing the window keeps approval while the tray app runs. Mount Medic never saves your password; installing updates and some system mount actions can ask separately.
 
 ### Command line

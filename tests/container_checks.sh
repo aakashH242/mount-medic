@@ -19,6 +19,7 @@ python3 install.py --apply /work --destdir /tmp/staged
 # Some distributions default Xvfb to 640x480, clipping the GTK header controls.
 MM_STAGED_ROOT=/tmp/staged dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/ui_smoke.py "${MM_ARTIFACTS:-/tmp}/ui.png"
 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/feedback_smoke.py "${MM_ARTIFACTS:-/tmp}/feedback"
+dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/drive_details_smoke.py "${MM_ARTIFACTS:-/tmp}/drive-details"
 python3 install.py --remove --destdir /tmp/staged
 test ! -e /tmp/staged/usr/local/share/icons/hicolor/256x256/apps/io.github.aakashH242.MountMedic.png
 if command -v shellcheck >/dev/null; then

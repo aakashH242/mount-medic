@@ -21,6 +21,7 @@ from .feedback import Toast
 from .model import MedicError, NEXT_STEPS
 from .protocol import BUS_NAME
 from .storage import Preferences, read_json
+from .usage import storage_summary
 from .notifications import DISCOVERY_ACTIONS, Notifications
 
 STATE_LABELS = {
@@ -274,6 +275,11 @@ class MedicApplication(Gtk.Application):
         panel.get_style_context().add_class("inspector")
         self.detail_title = appearance.label("Select a drive", "section-title")
         panel.pack_start(self.detail_title, False, False, 0)
+        self.usage_summary = appearance.label("", "usage-summary")
+        self.usage_summary.set_selectable(True)
+        panel.pack_start(self.usage_summary, False, False, 0)
+        self.storage_meter = appearance.storage_meter()
+        panel.pack_start(self.storage_meter, False, False, 0)
         self.detail = appearance.label("")
         self.detail.set_selectable(True)
         self.detail.set_max_width_chars(64)
@@ -281,11 +287,7 @@ class MedicApplication(Gtk.Application):
         self.permission_summary = appearance.label("", "muted")
         self.permission_summary.get_style_context().add_class("permissions")
         panel.pack_start(self.permission_summary, False, False, 0)
-        self.identity_details = appearance.label("")
-        self.identity_details.set_selectable(True)
-        self.identity_details.set_max_width_chars(64)
-        self.identity_expander = Gtk.Expander(label="Drive details")
-        self.identity_expander.add(self.identity_details)
+        self.build_drive_details()
         panel.pack_start(self.identity_expander, False, False, 0)
         buttons = Gtk.Box(spacing=8, margin_top=8)
         self.buttons = {}
@@ -317,6 +319,40 @@ class MedicApplication(Gtk.Application):
         panel.hide()
         self.inspector = panel
 
+    def build_drive_details(self):
+        grid = Gtk.Grid(column_spacing=24, row_spacing=8, margin_top=8)
+        grid.get_style_context().add_class("drive-details")
+        self.identity_fields = {}
+        for index, title in enumerate(("Drive", "Storage", "Device", "Filesystem UUID", "Disk identity", "Volume ID", "Last check")):
+            heading = appearance.label(title, "muted")
+            heading.get_style_context().add_class("detail-label")
+            heading.set_valign(Gtk.Align.START)
+            value = appearance.label("", "detail-name" if title == "Drive" else "")
+            value.set_selectable(True)
+            value.set_hexpand(True)
+            value.set_valign(Gtk.Align.START)
+            value.set_max_width_chars(48)
+            if title in {"Device", "Filesystem UUID", "Volume ID"}:
+                value.get_style_context().add_class("detail-id")
+            grid.attach(heading, 0, index, 1, 1)
+            grid.attach(value, 1, index, 1, 1)
+            self.identity_fields[title] = value
+        self.identity_expander = Gtk.Expander(label="Drive details")
+        self.identity_expander.get_label_widget().get_style_context().add_class("detail-label")
+        self.identity_expander.add(grid)
+
+    def update_drive_details(self, row):
+        volume = row["volume"] if row else {}
+        identity = volume.get("identity", {})
+        values = {"Drive": volume.get("label") or "NTFS drive", "Storage": storage_summary(volume),
+                  "Device": volume.get("device") or "Disconnected", "Filesystem UUID": identity.get("uuid") or "Unknown",
+                  "Disk identity": identity.get("hardware") or "Unavailable", "Volume ID": volume.get("id", ""),
+                  "Last check": checked_time(row.get("checked_at"))} if row else {}
+        for title, label in self.identity_fields.items():
+            text = values.get(title, "")
+            label.set_text(text)
+            label.get_accessible().set_name(f"{title}: {text}" if text else title)
+
     def close_window(self, window, event):
         self.watch_in_background()
         window.hide()
@@ -328,6 +364,7 @@ class MedicApplication(Gtk.Application):
 
     def selection_changed(self, selection):
         row = self.selected()
+        self.update_drive_details(row)
         self.refresh_button.set_sensitive(not self.busy)
         self.more_button.set_sensitive(not self.busy and row is not None)
         self.identity_expander.set_sensitive(row is not None)
@@ -339,19 +376,20 @@ class MedicApplication(Gtk.Application):
             self.detail.set_tooltip_text(None)
             self.detail.get_accessible().set_description("")
             self.permission_summary.set_text("Select a drive to manage its permissions.")
-            self.identity_details.set_text("")
+            self.usage_summary.set_text("")
+            self.storage_meter.hide()
             self.buttons["Check now"].set_label("Check monitored drives")
             return
         volume = row["volume"]
         self.buttons["Check now"].set_label("Check now")
         self.detail_title.set_text(STATE_LABELS.get(row["state"], "Not verified"))
+        self.usage_summary.set_text(storage_summary(volume))
+        appearance.update_storage_meter(self.storage_meter, volume)
         guidance = row.get("next_steps", "Run a fresh check before acting.")
         # Keep saved-result warnings and worker refusals visible, even for familiar states.
         self.detail.set_text(UI_HINTS.get(row["state"], guidance) if guidance == NEXT_STEPS.get(row["state"]) else guidance)
         self.detail.set_tooltip_text(guidance)
         self.detail.get_accessible().set_description(guidance)
-        self.identity_details.set_text(drive_description(volume) + f"\nVolume ID: {volume['id']}\n"
-                                       f"Last check: {checked_time(row.get('checked_at'))}")
         settings = row.get("settings", {})
         self.buttons["Monitor"].set_label("Remove" if settings.get("monitor") else "Monitor")
         self.buttons["Monitor"].set_sensitive(not self.busy and (settings.get("monitor", False) or row["state"] != "absent"))
@@ -407,6 +445,9 @@ class MedicApplication(Gtk.Application):
         self.rows = {}
         for row in rows:
             key = row["volume"]["id"]
+            saved = self.reports.get(key, {})
+            if not row.get("checked_at") and saved.get("checked_at"):
+                row["checked_at"] = saved["checked_at"]
             if key in self.reports and row["state"] not in {"absent", "mounted_rw", "mounted_ro"}:
                 row.update({name: value for name, value in self.reports[key].items() if name not in {"volume", "settings"}})
             self.rows[key] = row
@@ -431,7 +472,7 @@ class MedicApplication(Gtk.Application):
             checked = row.get("checked_at")
             name = GLib.markup_escape_text(volume.get("label") or "NTFS drive")
             device = GLib.markup_escape_text(volume.get("device") or "Disconnected")
-            size = volume.get("identity", {}).get("size", 0) / (1024 ** 3)
+            usage = GLib.markup_escape_text(storage_summary(volume))
             settings = row.get("settings", {})
             membership = "Added" if settings.get("monitor") else "Not added"
             if key in ignored:
@@ -439,7 +480,7 @@ class MedicApplication(Gtk.Application):
             monitoring = "\n".join([membership, *(
                 f"{title} {'on' if settings.get(option) else 'off'}"
                 for option, title in (("auto_repair", "Auto-repair"), ("auto_mount", "Auto-mount")))])
-            iterator = self.store.append([key, f"<b>{name}</b>\n<small>{device} · {size:.1f} GiB</small>",
+            iterator = self.store.append([key, f"<b>{name}</b>\n{usage}\n<small>{device}</small>",
                                           STATE_LABELS.get(row["state"], row["state"]),
                                           checked_time(checked), drive_description(volume) + "\n" +
                                           STATE_LABELS.get(row["state"], row["state"]) +
@@ -450,6 +491,11 @@ class MedicApplication(Gtk.Application):
             self.selection.select_path(Gtk.TreePath.new_first())
 
     def checked(self, reports):
+        for report in reports:
+            current = self.rows.get(report["volume"]["id"])
+            if report["state"] == "absent" and current:
+                # A mid-check disconnect returns only an ID; retain its name, not stale mounted space.
+                report["volume"] = {**current["volume"], **report["volume"], "device": "", "mounts": [], "usage": None}
         self.preferences.remember(reports)
         for report in reports:
             key = report["volume"]["id"]
@@ -934,8 +980,8 @@ class MedicApplication(Gtk.Application):
 
         def completed(value):
             rows, reports = value
-            self.checked(reports)
             self.render(rows)
+            self.checked(reports)
             for report in reports:
                 key = report["volume"]["id"]
                 fingerprint = report["state"] + str(report.get("repair", {}).get("started", ""))

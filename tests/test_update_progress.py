@@ -39,6 +39,13 @@ class UpdateProgressTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in progress.stage.call_args_list],
                          ['Verifying the update…', 'Installing update…'])
 
+    def test_reopened_app_refuses_installation_and_leaves_the_replacement_running(self):
+        with patch('os.geteuid', return_value=1000), patch('mount_medic.updates.installed', return_value=True), patch('mount_medic.updates.confirm_dependencies', return_value=[]), patch('mount_medic.updates.download_archive', return_value=Path('/tmp/fixture')), patch('mount_medic.updates.stop_desktop', return_value=3), patch('mount_medic.updates.installer_command') as installer, patch('mount_medic.updates.subprocess.Popen') as restart:
+            with self.assertRaisesRegex(MedicError, 'reopened during the update'):
+                updates.install(metadata())
+        installer.assert_not_called()
+        restart.assert_not_called()
+
     def test_failure_only_claims_previous_version_when_recovery_is_clear(self):
         with patch('mount_medic.updates.source_version', return_value=__version__):
             updates.save_result(TARGET_VERSION, MedicError('cancelled'))

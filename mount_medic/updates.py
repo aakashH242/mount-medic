@@ -171,15 +171,19 @@ def stop_desktop() -> int:
                               GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
         if not owned:
             return 0
+        owner = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner",
+                              GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
         proxy = Gio.Application(application_id=BUS_NAME, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE | Gio.ApplicationFlags.IS_LAUNCHER)
         # GApplication.run is a process entry point; each update coordinator invokes it once.
         mode = proxy.run(["mount-medic", "--quit-for-update"])
         if mode in (10, 11):
-            # After Quit is accepted, wait for the handoff rather than losing the
-            # restart mode to a deadline while the old app is still shutting down.
+            # Track this connection so a newly opened app cannot prolong the handoff.
             while bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
-                                GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]:
+                                GLib.Variant("(s)", (owner,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]:
                 time.sleep(0.05)
+            if bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
+                             GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]:
+                return 3
         return mode
     except GLib.Error as error:
         raise MedicError(f"Could not contact the desktop app: {error.message}") from error
@@ -224,6 +228,8 @@ def install(release: dict, restart: str | None = None, progress=None) -> dict:
             mode = stop_desktop()
         if mode == 2:
             raise MedicError("Finish the active operation or close its dialog before installing an update")
+        if mode == 3:
+            raise MedicError("Mount Medic was reopened during the update. Try the update again.")
         if mode not in (0, 10, 11):
             raise MedicError("Could not stop the desktop app safely")
         resume = restart or ({10: "gui", 11: "watch"}.get(mode))

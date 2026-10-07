@@ -37,9 +37,9 @@ def mounted_in_text(text: str, volume: Volume) -> bool:
 
 def descriptor_device(descriptor: Path) -> str:
     target = os.readlink(descriptor)
-    # procfs renders sockets/pipes itself; they cannot be block devices. Some
-    # SELinux domains deny getattr on these unrelated kernel socket inodes.
-    if re.fullmatch(r"(?:socket|pipe):\[[0-9]+\]", target):
+    # procfs labels these kernel handles; none can be a block device. SELinux
+    # may deny getattr on unrelated sockets or anonymous inodes such as io_uring.
+    if target.startswith("anon_inode:") or re.fullmatch(r"(?:socket|pipe):\[[0-9]+\]", target):
         return ""
     info = descriptor.stat()
     return f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}" if stat.S_ISBLK(info.st_mode) else ""

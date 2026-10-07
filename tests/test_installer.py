@@ -1,4 +1,6 @@
 import os
+import base64
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -7,12 +9,65 @@ import unittest
 from unittest.mock import Mock, patch
 
 from mount_medic.dependencies import missing_packages, package_install_command
-from mount_medic.installer import autostart, guided, install_tree, prepare_install, uninstall_tree
+from mount_medic.installer import autostart, decode_payload, guided, install_payload, install_tree, prepare_install, read_build_output, uninstall_tree
 from mount_medic.storage import Preferences, read_json
 from mount_medic.model import MedicError
 
 
 class InstallerTests(unittest.TestCase):
+    def test_target_payload_accepts_scoped_new_integration_and_rejects_unsafe_output(self):
+        relative = "usr/share/dbus-1/system.d/io.github.aakashH242.MountMedic-new.conf"
+        encoded = base64.b64encode(b"target integration").decode("ascii")
+        self.assertEqual(decode_payload(json.dumps({relative: [encoded, 0o644]}).encode()), {relative: (b"target integration", 0o644)})
+        unsafe = ["etc/sudoers", "usr/local/bin/other-app", "usr/local/lib/mount-medic/../other", "/usr/local/lib/mount-medic/worker",
+                  "usr/local/lib/mount-medic//worker", "usr/local/lib/mount-medic/manifest.json", "usr/share/dbus-1/system.d/other.conf"]
+        for path in unsafe:
+            with self.subTest(path=path), self.assertRaises(MedicError):
+                decode_payload(json.dumps({path: [encoded, 0o644]}).encode())
+        for entry in ([encoded, 0o4755], [encoded, True], ["not base64", 0o644], {}, [encoded]):
+            with self.subTest(entry=entry), self.assertRaises(MedicError):
+                decode_payload(json.dumps({relative: entry}).encode())
+
+    def test_build_output_rejects_symlinks_hardlinks_nonfiles_and_oversize(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.write_bytes(b"valid")
+            self.assertEqual(read_build_output(output, 5), b"valid")
+            link = root / "link"
+            link.symlink_to(output)
+            with self.assertRaises(OSError):
+                read_build_output(link, 5)
+            with self.assertRaises(MedicError):
+                read_build_output(output, 4)
+            os.link(output, root / "hardlink")
+            with self.assertRaises(MedicError):
+                read_build_output(output, 5)
+            os.mkfifo(root / "fifo")
+            with self.assertRaises(MedicError):
+                read_build_output(root / "fifo", 5)
+
+    def test_obsolete_external_files_are_removed_with_rollback_and_modified_files_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = "usr/share/dbus-1/system.d/io.github.aakashH242.MountMedic-old.conf"
+            edited = "usr/share/dbus-1/system.d/io.github.aakashH242.MountMedic-local.conf"
+            new = "usr/share/dbus-1/system.d/io.github.aakashH242.MountMedic-new.conf"
+            original = {old: (b"old", 0o644), edited: (b"original", 0o644)}
+            install_payload(original, root)
+            (root / edited).write_bytes(b"local edit")
+            with patch("mount_medic.installer.exchange_directories", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    install_payload({new: (b"new", 0o644)}, root)
+            self.assertEqual((root / old).read_bytes(), b"old")
+            self.assertFalse((root / new).exists())
+            install_payload({new: (b"new", 0o644)}, root)
+            self.assertFalse((root / old).exists())
+            self.assertEqual((root / edited).read_bytes(), b"local edit")
+            self.assertEqual(set(read_json(root / "usr/local/lib/mount-medic/manifest.json")), {new})
+            uninstall_tree(root)
+            self.assertFalse((root / new).exists())
+
     def test_guided_setup_configures_notifications_only_after_installing(self):
         with (
             tempfile.TemporaryDirectory() as directory,

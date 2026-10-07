@@ -47,6 +47,12 @@ def exercise():
             shutil.copy2(checkout / name, source / name)
         declaration = f'__version__ = "{TARGET_VERSION}"\n'
         (source / "mount_medic/__init__.py").write_text(declaration)
+        old_integration = "io.github.aakashH242.MountMedic.conf"
+        new_integration = "io.github.aakashH242.MountMedic-updated.conf"
+        (source / "integration" / old_integration).rename(source / "integration" / new_integration)
+        target_installer = source / "mount_medic/installer.py"
+        target_installer.write_text(target_installer.read_text().replace(old_integration, new_integration).replace(
+            'WRAPPER = """#!/usr/bin/python3 -IB\n', 'WRAPPER = """#!/usr/bin/python3 -IB\n# Target release launcher\n'))
         tracked = "\0".join(str(path.relative_to(source)) for path in source.rglob("*") if path.is_file()).encode()
         with patch("scripts.release.subprocess.check_output", return_value=tracked):
             release = package(source, root / "assets")
@@ -58,7 +64,11 @@ def exercise():
         settings = destination / "var/lib/mount-medic/1000.json"
         atomic_json(settings, {"drive": {"monitor": True, "auto_repair": True}})
         real_install = installer.install_tree
-        with patch.object(installer, "fetch_release", return_value=release), patch.object(installer, "missing_packages", return_value=[]), patch.object(installer, "install_tree", side_effect=lambda tree, ignored: real_install(tree, destination)):
+        old_path = "usr/share/dbus-1/system.d/" + old_integration
+        with patch.object(installer, "payload", return_value={old_path: (b"old integration", 0o644)}):
+            real_install(source, destination)
+        real_payload_install = installer.install_payload
+        with patch.object(installer, "fetch_release", return_value=release), patch.object(installer, "missing_packages", return_value=[]), patch.object(installer, "install_payload", side_effect=lambda files, ignored: real_payload_install(files, destination)):
             with patch.object(installer.subprocess, "run", wraps=subprocess.run) as run:
                 previous = os.umask(0o077)
                 try:
@@ -68,6 +78,8 @@ def exercise():
             build_call = next(call for call in run.call_args_list if call.args[0] == ["make", "all"])
             assert build_call.kwargs["user"] > 0 and build_call.kwargs["user"] != args.build_user
             assert build_call.kwargs["extra_groups"] == []
+            handoff = next(call for call in run.call_args_list if call.args[0][:3] == [sys.executable, "-IB", "-c"])
+            assert handoff.kwargs["user"] == build_call.kwargs["user"] and handoff.kwargs["extra_groups"] == []
             try:
                 pwd.getpwuid(build_call.kwargs["user"])
             except KeyError:
@@ -79,6 +91,9 @@ def exercise():
             binary = destination / installer.LIBRARY / "mount-medic-probe"
             assert binary.stat().st_uid == 0 and binary.stat().st_mode & 0o111
             assert (destination / installer.LIBRARY / "mount_medic/__init__.py").read_text() == declaration
+            assert "# Target release launcher" in (destination / "usr/local/bin/mount-medic").read_text()
+            assert (destination / "usr/share/dbus-1/system.d" / new_integration).is_file()
+            assert not (destination / old_path).exists()
             assert not (destination / installer.TRANSACTION).exists()
             archive.write_bytes(b"corrupt")
             with patch.object(installer, "prepare_install", side_effect=AssertionError("built a corrupt archive")):

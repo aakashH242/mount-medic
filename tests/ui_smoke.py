@@ -108,6 +108,9 @@ def installed_icon():
     icon = theme.lookup_icon(BUS_NAME, 32, Gtk.IconLookupFlags.FORCE_SIZE)
     assert icon and icon.get_filename().startswith(root), "installed launcher icon did not resolve"
     assert icon.load_icon().get_width() == 32
+    tray = theme.lookup_icon(BUS_NAME + "-symbolic", 16, Gtk.IconLookupFlags.FORCE_SIZE)
+    assert tray and tray.get_filename().startswith(root), "installed symbolic tray icon did not resolve"
+    assert tray.load_icon().get_width() == 16
     entry = GLib.KeyFile()
     entry.load_from_file(str(Path(root) / f"usr/local/share/applications/{BUS_NAME}.desktop"), GLib.KeyFileFlags.NONE)
     assert entry.get_string("Desktop Entry", "Icon") == BUS_NAME
@@ -421,8 +424,18 @@ def main():
     assert app.window.get_icon_name() == BUS_NAME
     app.setup_indicator()
     if app.indicator:
-        assert app.indicator.get_icon() == BUS_NAME
+        assert app.indicator.get_icon() == BUS_NAME + "-symbolic"
         assert app.indicator.get_icon_theme_path() == str(ASSETS)
+    tray = Gtk.IconTheme.get_default().lookup_icon(BUS_NAME + "-symbolic", 16, Gtk.IconLookupFlags.FORCE_SIZE)
+    for color in ("white", "black"):
+        foreground = Gdk.RGBA()
+        foreground.parse(color)
+        pixbuf, symbolic = tray.load_symbolic(foreground)
+        assert symbolic
+        pixels = pixbuf.get_pixels()
+        opaque = [pixels[index:index + 3] for index in range(0, len(pixels), 4) if pixels[index + 3] > 200]
+        expected = 255 if color == "white" else 0
+        assert opaque and all(abs(channel - expected) < 2 for pixel in opaque for channel in pixel), f"tray foreground {color}: {len(opaque)} opaque pixels, colors {set(opaque)}"
     work = Volume(Identity("ABCD1234", "sample-ssd", "part-a", 500_000_000_000, 2048),
                   "/dev/example1", "Work", mounts=["/media/Work"])
     games = Volume(Identity("BCD23456", "sample-ssd", "part-b", 1_000_000_000_000, 2048),

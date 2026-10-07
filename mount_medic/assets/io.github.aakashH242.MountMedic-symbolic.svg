@@ -1,5 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#2e3436" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="2" y="1" width="12" height="14" rx="3"/>
-  <path d="M5 9V5l3 3 3-3v4M5 12h3"/>
-  <circle cx="11" cy="12" r=".75" fill="#2e3436" stroke="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <defs><style id="current-color-scheme" type="text/css">.ColorScheme-Text { color:inherit; }</style></defs>
+  <!-- Older GTK symbolic loaders recolor fills, not strokes. -->
+  <g class="ColorScheme-Text" fill="currentColor">
+    <path fill-rule="evenodd" d="M5 .25h6A3.75 3.75 0 0 1 14.75 4v8A3.75 3.75 0 0 1 11 15.75H5A3.75 3.75 0 0 1 1.25 12V4A3.75 3.75 0 0 1 5 .25Zm0 1.5A2.25 2.25 0 0 0 2.75 4v8A2.25 2.25 0 0 0 5 14.25h6A2.25 2.25 0 0 0 13.25 12V4A2.25 2.25 0 0 0 11 1.75H5Z"/>
+    <path d="M4.25 9V5a.75.75 0 0 1 1.28-.53L8 6.94l2.47-2.47a.75.75 0 0 1 1.28.53v4a.75.75 0 0 1-1.5 0V6.81L8.53 8.53a.75.75 0 0 1-1.06 0L5.75 6.81V9a.75.75 0 0 1-1.5 0Z"/>
+    <rect x="4.25" y="11.25" width="4.5" height="1.5" rx=".75"/>
+    <circle cx="11" cy="12" r=".75"/>
+  </g>
 </svg>

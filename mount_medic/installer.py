@@ -1,4 +1,5 @@
 import argparse
+import base64
 from contextlib import nullcontext
 import ctypes
 import grp
@@ -7,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -17,7 +19,7 @@ from .dependencies import PACKAGES, dependency_command, family, missing_packages
 from .model import MedicError
 from .protocol import BUS_NAME
 from .storage import Preferences, atomic_json, notification_seconds, read_json
-from .releases import ReleaseError, create_public_directory, extract_archive, fetch_release, sync_directory, verify_archive, version, MAX_ARCHIVE
+from .releases import ReleaseError, create_public_directory, extract_archive, fetch_release, sync_directory, verify_archive, version, MAX_ARCHIVE, MAX_SOURCE
 
 LIBRARY = Path("usr/local/lib/mount-medic")
 MANIFEST = LIBRARY / "manifest.json"
@@ -30,7 +32,7 @@ INTEGRATION = {
 }
 ICONS = {
     f"{BUS_NAME}.png": "usr/local/share/icons/hicolor/256x256/apps",
-    f"{BUS_NAME}-symbolic.svg": "usr/local/share/icons/hicolor/symbolic/apps",
+    f"{BUS_NAME}-symbolic.svg": "usr/local/share/icons/hicolor/scalable/apps",
 }
 WRAPPER = """#!/usr/bin/python3 -IB
 import sys
@@ -143,8 +145,47 @@ def exchange_directories(first: Path, second: Path) -> None:
     sync_directory(second.parent)
 
 
-def external_paths() -> set:
-    return {str(Path(folder) / name) for name, folder in (INTEGRATION | ICONS).items()} | {"usr/local/bin/mount-medic"}
+def external_path(relative: str) -> bool:
+    if relative == "usr/local/bin/mount-medic":
+        return True
+    path = Path(relative)
+    name = path.name.lower()
+    if not name.startswith((BUS_NAME.lower() + ".", BUS_NAME.lower() + "-", "io.github.aakashh242.mount-medic.")):
+        return False
+    suffixes = {"usr/share/dbus-1/system-services": ".service", "usr/share/dbus-1/system.d": ".conf",
+                "usr/share/polkit-1/actions": ".policy", "usr/local/share/applications": ".desktop"}
+    folder = path.parent.as_posix()
+    if folder in suffixes:
+        return name.endswith(suffixes[folder])
+    return bool(re.fullmatch(r"usr/local/share/icons/hicolor/(?:[0-9]{1,4}x[0-9]{1,4}|scalable|symbolic)/apps", folder)) and path.suffix in {".png", ".svg"}
+
+
+def validate_payload_path(relative: str) -> None:
+    if not isinstance(relative, str) or Path(relative).as_posix() != relative or ".." in Path(relative).parts or "\0" in relative:
+        raise MedicError("Invalid installation payload path")
+    if relative == str(MANIFEST) or not (relative.startswith(str(LIBRARY) + "/") or external_path(relative)):
+        raise MedicError("Unexpected installation path")
+
+
+def decode_payload(data: bytes) -> dict:
+    try:
+        saved = json.loads(data)
+        if not isinstance(saved, dict) or not 1 <= len(saved) <= 1000:
+            raise ValueError("Invalid file count")
+        files = {}
+        total = 0
+        for relative, entry in saved.items():
+            validate_payload_path(relative)
+            if not isinstance(entry, list) or len(entry) != 2 or type(entry[1]) is not int or entry[1] not in (0o644, 0o755):
+                raise ValueError("Invalid file mode")
+            content = base64.b64decode(entry[0], validate=True)
+            total += len(content)
+            if total > MAX_SOURCE + MAX_ARCHIVE:
+                raise ValueError("Payload too large")
+            files[relative] = (content, entry[1])
+        return files
+    except (ValueError, TypeError) as error:
+        raise MedicError(f"Invalid target installation payload: {error}") from error
 
 
 def recover_install(root: Path) -> dict:
@@ -164,7 +205,8 @@ def recover_install(root: Path) -> dict:
                 os.rename(library, staged)
                 sync_directory(library.parent)
         for relative, old in saved["external"].items():
-            if relative not in external_paths():
+            validate_payload_path(relative)
+            if not external_path(relative):
                 raise MedicError("Unexpected recovery path")
             target = safe_target(root, relative)
             if old is None:
@@ -181,8 +223,11 @@ def recover_install(root: Path) -> dict:
 
 
 def install_tree(source: Path, root: Path) -> dict:
+    return install_payload(payload(source), root)
+
+
+def install_payload(files: dict, root: Path) -> dict:
     recover_install(root)
-    files = payload(source)
     library = safe_target(root, str(LIBRARY))
     transaction = safe_target(root, str(TRANSACTION))
     create_public_directory(transaction.parent)
@@ -198,16 +243,24 @@ def install_tree(source: Path, root: Path) -> dict:
         create_public_directory(staged)
         previous = {}
         for relative, contents in files.items():
+            validate_payload_path(relative)
             target = safe_target(root, relative)
             if relative.startswith(str(LIBRARY) + "/"):
                 write_file(staged / Path(relative).relative_to(LIBRARY), contents)
-            elif relative in external_paths():
+            else:
                 previous[relative] = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
                 if target.exists():
                     write_file(transaction / "backup" / relative, (target.read_bytes(), previous[relative]))
-            else:
-                raise MedicError("Unexpected installation path")
             manifest[relative] = hashlib.sha256(contents[0]).hexdigest()
+        # Only remove obsolete integration we still own; preserve local edits.
+        for relative, checksum in read_json(safe_target(root, str(MANIFEST))).items():
+            validate_payload_path(relative)
+            if relative in files or not external_path(relative):
+                continue
+            target = safe_target(root, relative)
+            if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == checksum:
+                previous[relative] = stat.S_IMODE(target.stat().st_mode)
+                write_file(transaction / "backup" / relative, (target.read_bytes(), previous[relative]))
         atomic_json(staged / "manifest.json", manifest)
         # Staged files and directory entries must survive a power loss before switching.
         for path in staged.rglob("*"):
@@ -225,7 +278,12 @@ def install_tree(source: Path, root: Path) -> dict:
         if root == Path("/"):
             require_idle()
         for relative in previous:
-            write_file(safe_target(root, relative), files[relative])
+            target = safe_target(root, relative)
+            if relative in files:
+                write_file(target, files[relative])
+            else:
+                target.unlink()
+                sync_directory(target.parent)
         if library.exists():
             exchange_directories(library, staged)
         else:
@@ -243,10 +301,8 @@ def uninstall_tree(root: Path) -> dict:
     recover_install(root)
     manifest = read_json(safe_target(root, str(MANIFEST)))
     preserved = []
-    allowed = external_paths()
     for relative, checksum in manifest.items():
-        if not relative.startswith(str(LIBRARY) + "/") and relative not in allowed:
-            raise MedicError("Manifest includes an unexpected installation path")
+        validate_payload_path(relative)
         path = safe_target(root, relative)
         if not path.exists():
             continue
@@ -327,7 +383,7 @@ def guided(source: Path) -> None:
     print("Installed. Open Mount Medic from the application menu to choose drives. No disks were checked or repaired.")
 
 
-def prepare_install(source: Path, uid: int, requirements: dict | None = None) -> None:
+def prepare_install(source: Path, uid: int, requirements: dict | None = None) -> dict:
     if uid <= 0:
         raise MedicError("The native probe must be built as a normal user")
     if requirements:
@@ -351,7 +407,31 @@ def prepare_install(source: Path, uid: int, requirements: dict | None = None) ->
             raise MedicError("Required packages are still missing after dependency installation")
     subprocess.run(["make", "all"], cwd=source, check=True, env=environment,
                    user=uid, group=group, extra_groups=groups)
-    print("Files to install:\n" + "\n".join("/" + name for name in payload(source)))
+    if requirements:
+        # Keep payload(source) as the unprivileged handoff across updater versions.
+        code = ("import base64,json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+                "from mount_medic.installer import payload; files=payload(Path(sys.argv[1])); "
+                "Path(sys.argv[1],'build','payload.json').write_text(json.dumps("
+                "{name:[base64.b64encode(content).decode('ascii'),mode] for name,(content,mode) in files.items()}))")
+        subprocess.run([sys.executable, "-IB", "-c", code, str(source)], check=True, env=environment,
+                       user=uid, group=group, extra_groups=groups)
+        files = decode_payload(read_build_output(source / "build/payload.json", MAX_SOURCE * 2))
+    else:
+        files = payload(source)
+    print("Files to install:\n" + "\n".join("/" + name for name in files))
+    return files
+
+
+def read_build_output(path: Path, limit: int) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= limit:
+            raise MedicError("Invalid build output")
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise MedicError("Build output exceeds its size limit")
+    return data
 
 
 def build_uid() -> int:
@@ -406,18 +486,18 @@ def upgrade_release(args) -> dict:
             raise MedicError("A release must contain source, not build output")
         build.mkdir(mode=0o700)
         os.chown(build, builder, builder)
-        prepare_install(source, builder, {**release, "approved_packages": args.approved_packages})
+        files = prepare_install(source, builder, {**release, "approved_packages": args.approved_packages})
+        launchers = ("usr/local/bin/mount-medic", str(LIBRARY / "worker"), str(LIBRARY / "installer"))
+        declaration = files.get(str(LIBRARY / "mount_medic/__init__.py"))
+        if any(files.get(name, (None, None))[1] != 0o755 for name in launchers) or not declaration or declaration[0] != (source / "mount_medic/__init__.py").read_bytes():
+            raise MedicError("Target payload is missing executable launchers or its matching version")
         os.chown(build, 0, 0)
         build.chmod(0o700)
         binary = build / "mount-medic-probe"
-        descriptor = os.open(binary, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= MAX_ARCHIVE:
-                raise MedicError("Invalid native build output")
-            compiled = stream.read(MAX_ARCHIVE + 1)
+        compiled = read_build_output(binary, MAX_ARCHIVE)
         write_file(binary, (compiled, 0o755))
-        result = install_tree(source, Path("/"))
+        files[str(LIBRARY / "mount-medic-probe")] = (compiled, 0o755)
+        result = install_payload(files, Path("/"))
         return {**result, "version": release["version"]}
 
 

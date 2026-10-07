@@ -5,7 +5,7 @@ import subprocess
 from .model import MedicError
 
 PACKAGES = {
-    "debian": ["apt-get", "install", "python3", "python3-gi", "gir1.2-gtk-3.0", "gir1.2-ayatanaappindicator3-0.1",
+    "debian": ["apt-get", "install", "python3", "python3-gi", "gir1.2-gtk-3.0", "gir1.2-ayatanaappindicator3-0.1", "librsvg2-common",
                "build-essential", "pkg-config", "ntfs-3g", "ntfs-3g-dev", "util-linux", "udisks2", "polkitd", "pkexec"],
     "fedora": ["dnf", "install", "python3", "python3-gobject", "gtk3", "libappindicator-gtk3",
                "gcc", "glibc-devel", "make", "pkgconf-pkg-config", "ntfs-3g", "ntfsprogs", "ntfs-3g-devel", "util-linux", "udisks2", "polkit"],

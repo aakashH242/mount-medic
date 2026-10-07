@@ -729,14 +729,15 @@ class MedicApplication(Gtk.Application):
             self.progress.set_text(f"Installing {candidate['version']}… The app will restart when finished.")
 
     def setup_indicator(self):
+        tray_icon = BUS_NAME + "-symbolic"
         for name in ("AyatanaAppIndicator3", "AppIndicator3"):
             try:
                 gi.require_version(name, "0.1")
                 import importlib
                 library = importlib.import_module("gi.repository." + name)
-                self.indicator = library.Indicator.new("mount-medic", BUS_NAME, library.IndicatorCategory.HARDWARE)
+                self.indicator = library.Indicator.new("mount-medic", tray_icon, library.IndicatorCategory.HARDWARE)
                 self.indicator.set_icon_theme_path(str(appearance.ASSETS))
-                self.indicator.set_icon_full(BUS_NAME, "Mount Medic")
+                self.indicator.set_icon_full(tray_icon, "Mount Medic")
                 self.indicator.set_status(library.IndicatorStatus.ACTIVE)
                 menu = Gtk.Menu()
                 for title, callback in (("Open Mount Medic", lambda item: self.activate()),

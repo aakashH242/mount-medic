@@ -1,9 +1,12 @@
 from pathlib import Path
 import shlex
+import subprocess
+
+from .model import MedicError
 
 PACKAGES = {
-    "debian": ["apt-get", "install", "python3", "python3-gi", "gir1.2-gtk-3.0", "gir1.2-ayatanaappindicator3-0.1",
-               "build-essential", "pkg-config", "ntfs-3g", "ntfs-3g-dev", "util-linux", "udisks2", "polkitd"],
+    "debian": ["apt-get", "install", "python3", "python3-gi", "gir1.2-gtk-3.0", "gir1.2-ayatanaappindicator3-0.1", "librsvg2-common",
+               "build-essential", "pkg-config", "ntfs-3g", "ntfs-3g-dev", "util-linux", "udisks2", "polkitd", "pkexec"],
     "fedora": ["dnf", "install", "python3", "python3-gobject", "gtk3", "libappindicator-gtk3",
                "gcc", "glibc-devel", "make", "pkgconf-pkg-config", "ntfs-3g", "ntfsprogs", "ntfs-3g-devel", "util-linux", "udisks2", "polkit"],
     "arch": ["pacman", "-Syu", "--needed", "python", "python-gobject", "gtk3", "libayatana-appindicator",
@@ -39,3 +42,40 @@ def family(path: Path = Path("/etc/os-release")) -> str:
 def dependency_command() -> str:
     command = PACKAGES.get(family())
     return shlex.join(command) if command else "Install Python 3.11+, GTK3/PyGObject, libntfs-3g development headers, ntfsfix, util-linux, UDisks2, polkit and a C compiler."
+
+
+def required_packages(platform: str) -> list[str]:
+    return PACKAGES[platform][3 if platform == "arch" else 2:]
+
+
+def missing_packages(platform: str, packages: list[str] | None = None) -> list[str]:
+    if platform not in PACKAGES:
+        return []
+    queries = {"debian": ["dpkg-query", "-W", "-f=${Status}"],
+               "fedora": ["rpm", "-q", "--whatprovides"], "opensuse": ["rpm", "-q", "--whatprovides"],
+               "arch": ["pacman", "-Q"], "alpine": ["apk", "info", "-e"]}
+    if packages is None:
+        packages = required_packages(platform)
+    missing = []
+    for package in packages:
+        try:
+            result = subprocess.run([*queries[platform], package], capture_output=True, text=True, timeout=30,
+                                    env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin", "LC_ALL": "C"})
+        except subprocess.TimeoutExpired as error:
+            raise MedicError(f"Package query timed out for {package}; try the update again.") from error
+        if result.returncode not in (0, 1):
+            raise MedicError(f"Cannot query installed package {package}: {result.stderr.strip()}")
+        if result.returncode or (platform == "debian" and result.stdout.strip() != "install ok installed"):
+            missing.append(package)
+    return missing
+
+
+def package_install_command(platform: str, packages: list[str]) -> list[str]:
+    command = PACKAGES[platform][:3 if platform == "arch" else 2]
+    if platform == "opensuse":
+        command.insert(1, "--non-interactive")
+    elif platform in {"debian", "fedora"}:
+        command.append("-y")
+    elif platform == "arch":
+        command.append("--noconfirm")
+    return [*command, *packages]

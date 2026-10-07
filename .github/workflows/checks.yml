@@ -8,7 +8,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose run --build --rm checks
+      - run: docker compose run --build --rm --cap-add=CHOWN --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE --cap-add=FOWNER -e MM_UPDATE_INSTALL_SMOKE=1 checks
       - uses: actions/upload-artifact@v4
         if: always()
         with:

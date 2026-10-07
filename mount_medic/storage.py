@@ -1,4 +1,5 @@
 import json
+import fcntl
 import os
 from pathlib import Path
 import tempfile
@@ -75,6 +76,22 @@ class Preferences:
         saved = read_json(path)
         saved["notification_seconds"] = notification_seconds(value)
         atomic_json(path, saved)
+
+    def updates(self) -> dict:
+        return read_json(self.config / "updates.json")
+
+    def save_updates(self, changes: dict) -> dict:
+        self.config.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with (self.config / ".updates.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                saved = self.updates()
+            except MedicError:
+                # This is a replaceable update cache, separate from drive permissions.
+                saved = {}
+            saved.update(changes)
+            atomic_json(self.config / "updates.json", saved)
+            return saved
 
     def ignored(self) -> dict:
         return read_json(self.config / "ignored.json")

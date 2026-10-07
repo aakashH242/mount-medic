@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from threading import Thread
 from unittest.mock import patch
 
 import gi
@@ -14,6 +15,7 @@ from gi.repository import Gio, GLib
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mount_medic.notifications import DISCOVERY_ACTIONS, Notifications, PATH, SERVICE
 from mount_medic.storage import Preferences
+from mount_medic.protocol import BUS_NAME
 
 XML = """<node><interface name="org.freedesktop.Notifications">
 <method name="Notify">
@@ -112,12 +114,14 @@ def exercise():
     preferences.unignore(key)
 
     server.mode = "delay"
-    notifications.show(key, "Discovered", "Drive", actions=DISCOVERY_ACTIONS)
+    delivered = []
+    notifications.show(key, "Discovered", "Drive", actions=DISCOVERY_ACTIONS, on_sent=lambda: delivered.append(key))
     wait_for(lambda: bool(server.pending))
     notifications.close(key)
     server.pending.pop().return_value(GLib.Variant("(u)", (4,)))
     wait_for(lambda: 4 in server.closed)
     assert not notifications.active, "late replies must not resurrect a cancelled notification"
+    assert not delivered, "cancelled notifications must not acknowledge delivery"
 
     server.mode = "fail"
     notifications.show(key, "Discovered", "Drive")
@@ -140,12 +144,40 @@ def exercise():
     assert actions == [("monitor", key), ("ignore", key)], "ignore stale actions from the old daemon"
     notifications.close_all()
     wait_for(lambda: 1 in replacement.closed)
+    messages = []
+    def send_update_error():
+        try:
+            notifications.message("Mount Medic update failed", "<b>Cancelled & retained</b>")
+            messages.append("sent")
+        except Exception as error:
+            messages.append(error)
+    sender = Thread(target=send_update_error)
+    sender.start()
+    wait_for(lambda: bool(messages))
+    sender.join(timeout=2)
+    assert messages == ["sent"] and replacement.calls[-1][5] == []
+    assert replacement.calls[-1][4] == "&lt;b&gt;Cancelled &amp; retained&lt;/b&gt;"
+    owner = replacement.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
+                                      GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 2000, None)
+    assert not owner.unpack()[0], "Error reporting took the application name and could block GUI restart"
+    previous_errors = len(errors)
+    replacement.mode = "fail"
+    update_key = "update:1.2.0"
+    acknowledge = lambda: preferences.save_updates({"notified": "1.2.0"})
+    notifications.show(update_key, "Update available", "Install or ignore", on_sent=acknowledge)
+    wait_for(lambda: len(errors) > previous_errors)
+    assert preferences.updates().get("notified") is None
+    replacement.mode = "reply"
+    notifications.show(update_key, "Update available", "Install or ignore", on_sent=acknowledge)
+    wait_for(lambda: preferences.updates().get("notified") == "1.2.0")
+    notifications.close_all()
     replacement.release()
     wait_for(lambda: notifications.owner is None)
+    previous_errors = len(errors)
     notifications.show(key, "Discovered", "Drive")
-    wait_for(lambda: len(errors) == 2)
+    wait_for(lambda: len(errors) > previous_errors)
     assert not notifications.active
-    print("PASS: native D-Bus payload/actions, escaping, dismissal, real expiry, persistent ignore, late replies, failure and daemon restart")
+    print("PASS: native D-Bus payload/actions, escaping, dismissal, real expiry, persistent ignore, late replies, failure, daemon restart and updater errors without application ownership")
 
 
 if __name__ == "__main__":

@@ -15,4 +15,5 @@ services:
     tmpfs:
       - /work:exec,size=256m
       - /tmp:exec,size=256m
+      - /var/tmp:exec,size=128m
     command: [sh, /source/tests/container_checks.sh]

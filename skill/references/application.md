@@ -2,7 +2,7 @@
 
 Use this route when Mount Medic is installed and the user wants its guarded workflow. If the user declines installation, use [native Linux tools](linux-recovery.md); do not fetch the repository or install packages to make the skill work.
 
-For an explicit application-install request, consult the project's maintained [installation instructions](https://github.com/aakashH242/mount-medic#install). Use its guided installer, which previews dependency commands and system changes and asks separately about startup. Do not maintain another distro package list in this skill.
+For an explicit application-install request, consult the project's maintained [installation instructions](https://github.com/aakashH242/mount-medic#install). Use its guided installer: it previews missing dependencies and system changes, requests administrator authentication once, installs missing packages automatically, and asks separately about startup. Do not maintain another distro package list in this skill.
 
 ## Diagnosis
 

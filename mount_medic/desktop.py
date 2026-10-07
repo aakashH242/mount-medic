@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ from . import appearance, client, dialogs, updates
 from .appearance import checked_time
 from .dialogs import drive_description
 from .engine import REPAIR_NOTICE
+from .feedback import Toast
 from .model import MedicError, NEXT_STEPS
 from .protocol import BUS_NAME
 from .storage import Preferences, read_json
@@ -42,6 +44,23 @@ UI_HINTS = {
     "unknown": "Check incomplete. Review diagnostics.",
     "missing_dependency": "Run mount-medic doctor to check missing tools.",
 }
+
+
+def check_result_text(reports):
+    if not reports:
+        return "No monitored drives to check."
+    states = [STATE_LABELS.get(report["state"], report["state"]) for report in reports]
+    if len(reports) == 1:
+        volume = reports[0]["volume"]
+        return f"{volume.get('label') or volume.get('device') or 'NTFS drive'}: {states[0]}"
+    return f"{len(reports)} drives · " + " · ".join(f"{count} {state.lower()}" for state, count in Counter(states).items())
+
+
+def check_result_level(reports):
+    states = {report["state"] for report in reports}
+    if states & {"failed", "io_failure", "io_or_corruption"}:
+        return "error"
+    return "warn" if states - {"clean", "mounted_rw"} else "info"
 
 
 class MedicApplication(Gtk.Application):
@@ -78,6 +97,11 @@ class MedicApplication(Gtk.Application):
     def do_shutdown(self):
         if self.notifications:
             self.notifications.close_all()
+        try:
+            client.call({"op": "forget_authorization"})
+        except MedicError:
+            # Process exit also revokes approval by disconnecting from the system bus.
+            pass
         Gtk.Application.do_shutdown(self)
 
     def do_command_line(self, command_line):
@@ -124,6 +148,8 @@ class MedicApplication(Gtk.Application):
         self.refresh_button.connect("clicked", lambda button: self.refresh())
         heading.pack_end(self.refresh_button, False, False, 0)
         box.pack_start(heading, False, False, 0)
+        self.toast = Toast(self.preferences)
+        box.pack_start(self.toast, False, False, 0)
         self.build_drive_list(box)
         self.build_inspector(box)
         self.progress = appearance.label("Read-only checks · Close keeps monitoring", "status-line")
@@ -145,18 +171,16 @@ class MedicApplication(Gtk.Application):
         icon = Gtk.Image.new_from_icon_name(BUS_NAME, Gtk.IconSize.DIALOG)
         icon.set_pixel_size(32)
         brand.pack_start(icon, False, False, 0)
-        words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        for text, style in (("Mount Medic", "brand-name"),):
-            label = appearance.label(text, style)
-            label.set_line_wrap(False)
-            label.set_ellipsize(Pango.EllipsizeMode.END)
-            label.set_width_chars(10)
-            words.pack_start(label, False, False, 0)
-        brand.pack_start(words, False, False, 0)
+        label = appearance.label("Mount Medic", "brand-name")
+        label.set_valign(Gtk.Align.CENTER)
+        label.set_line_wrap(False)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_width_chars(10)
+        brand.pack_start(label, False, False, 0)
         header.pack_start(brand)
         settings = Gtk.MenuButton(label="Settings")
         menu = Gtk.Menu()
-        for title, callback in (("Updates", self.update_settings), ("Notifications", self.notification_settings), ("Startup", self.startup_settings),
+        for title, callback in (("Updates", self.update_settings), ("Notifications", self.notification_settings), ("Security", self.security_settings), ("Startup", self.startup_settings),
                                 ("Quit Mount Medic", lambda item: self.quit())):
             item = Gtk.MenuItem(label=title)
             item.connect("activate", callback)
@@ -180,7 +204,7 @@ class MedicApplication(Gtk.Application):
             if number == 3:
                 renderer.set_property("ellipsize", Pango.EllipsizeMode.NONE)
             column = Gtk.TreeViewColumn(title)
-            renderer.set_property("width-chars", {1: 13, 2: 16, 3: 11, 5: 10}[number])
+            renderer.set_property("width-chars", {1: 13, 2: 16, 3: 11, 5: 16}[number])
             column.pack_start(renderer, True)
             column.add_attribute(renderer, "markup" if number == 1 else "text", number)
             column.set_expand(number == 1)
@@ -301,10 +325,10 @@ class MedicApplication(Gtk.Application):
             self.buttons[name].set_tooltip_text("Review the drive and confirm before continuing." if permitted else
                                               "Run a check and review diagnostics; this action is not currently eligible.")
 
-    def submit(self, operation, callback=None):
+    def submit(self, operation, callback=None, *, on_error=None):
         if self.busy:
             self.pending = True
-            self.show_error("An operation is already running. Wait for its result before requesting another action.")
+            (on_error or self.show_error)("An operation is already running. Wait for its result before requesting another action.")
             return
         self.busy = True
         if self.window:
@@ -324,7 +348,7 @@ class MedicApplication(Gtk.Application):
                 if callback:
                     callback(value)
             except Exception as error:
-                self.show_error(str(error))
+                (on_error or self.show_error)(str(error))
             if self.window:
                 self.selection_changed(self.selection)
             if self.pending:
@@ -367,14 +391,18 @@ class MedicApplication(Gtk.Application):
             name = GLib.markup_escape_text(volume.get("label") or "NTFS drive")
             device = GLib.markup_escape_text(volume.get("device") or "Disconnected")
             size = volume.get("identity", {}).get("size", 0) / (1024 ** 3)
-            membership = "Added" if row.get("settings", {}).get("monitor") else "Not added"
+            settings = row.get("settings", {})
+            membership = "Added" if settings.get("monitor") else "Not added"
             if key in ignored:
                 membership = "Added · ignored" if membership == "Added" else "Ignored"
+            monitoring = "\n".join([membership, *(
+                f"{title} {'on' if settings.get(option) else 'off'}"
+                for option, title in (("auto_repair", "Auto-repair"), ("auto_mount", "Auto-mount")))])
             iterator = self.store.append([key, f"<b>{name}</b>\n<small>{device} · {size:.1f} GiB</small>",
                                           STATE_LABELS.get(row["state"], row["state"]),
                                           checked_time(checked), drive_description(volume) + "\n" +
                                           STATE_LABELS.get(row["state"], row["state"]) +
-                                          f"\nLast check: {checked_time(checked)}\nMonitoring: {membership}", membership])
+                                          f"\nLast check: {checked_time(checked)}\nMonitoring: {monitoring}", monitoring])
             if key == previous:
                 self.selection.select_iter(iterator)
         if self.rows and self.selected() is None:
@@ -394,7 +422,29 @@ class MedicApplication(Gtk.Application):
         request = {"op": "check"}
         if row:
             request["id"] = row["volume"]["id"]
-        self.submit(lambda: client.call(request), self.checked)
+        self.show_feedback("Checking…\nRead-only inspection is running.")
+        self.run_manual_check(request, self.show_feedback)
+
+    def check_from_tray(self, item):
+        def notify_result(message, level):
+            title, unused, body = message.partition("\n")
+            self.notify("manual-check", title, body, level=level)
+        self.run_manual_check({"op": "check"}, notify_result)
+
+    def run_manual_check(self, request, feedback):
+        def completed(reports):
+            self.checked(reports)
+            feedback("Check complete\n" + check_result_text(reports), check_result_level(reports))
+        self.submit(lambda: client.call(request), completed, on_error=lambda message: feedback("Check failed\n" + message, "error"))
+
+    def show_feedback(self, message, level="info"):
+        if self.update_dialog and self.update_dialog.get_visible():
+            self.update_dialog.toast.show_message(message, level)
+        elif self.window and self.window.get_visible():
+            self.toast.show_message(message, level)
+            self.progress.set_text(message.split("\n", 1)[0])
+        else:
+            self.notify("action-result", "Mount Medic", message, level=level)
 
     def confirmation(self, title: str, text: str) -> bool:
         dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=Gtk.MessageType.WARNING,
@@ -430,6 +480,8 @@ class MedicApplication(Gtk.Application):
                 self.preferences.unignore(key)
             self.close_notification(key)
             self.cycle()
+            message = "Drive permissions saved." if result.get("monitor") else "Drive removed from monitoring."
+            self.show_feedback(message + "\n" + (row["volume"].get("label") or "NTFS drive"))
 
         self.submit(lambda: client.call(request), saved)
 
@@ -453,6 +505,7 @@ class MedicApplication(Gtk.Application):
             self.preferences.ignore(volume)
             self.close_notification(volume["id"])
             self.render(list(self.rows.values()))
+            self.show_feedback("Drive added to Ignore List.\n" + (volume.get("label") or "NTFS drive"))
         except (MedicError, OSError) as error:
             self.show_error(str(error))
 
@@ -463,14 +516,31 @@ class MedicApplication(Gtk.Application):
                 self.preferences.unignore(key)
                 self.discovered.discard(key)
                 self.render(list(self.rows.values()))
+                self.show_feedback("Drive removed from Ignore List.")
         except (MedicError, OSError) as error:
             self.show_error(str(error))
 
     def notification_settings(self, button):
         try:
-            seconds = dialogs.notification_settings(self.window, self.preferences.notification_seconds())
-            if seconds is not None:
-                self.preferences.set_notification_seconds(seconds)
+            settings = {"notification_seconds": self.preferences.notification_seconds(), "toast_seconds": self.preferences.toast_seconds(),
+                        "notification_sound": self.preferences.notification_sound_enabled()}
+            result = dialogs.notification_settings(self.window, settings)
+            if result is not None:
+                self.preferences.set_notification_settings(result)
+                self.show_feedback("Notification settings saved.")
+        except (MedicError, OSError) as error:
+            self.show_error(str(error))
+
+    def security_settings(self, button):
+        try:
+            hours = self.preferences.authorization_hours()
+            result = dialogs.security_settings(self.window, hours)
+            if result is not None and result != hours:
+                def save():
+                    client.call({"op": "forget_authorization"})
+                    self.preferences.set_authorization_hours(result)
+                self.submit(save, lambda unused: self.show_feedback(f"Security settings saved.\nApproval will last up to {result} " +
+                                                                    ("hour" if result == 1 else "hours") + " after the next password prompt."))
         except (MedicError, OSError) as error:
             self.show_error(str(error))
 
@@ -494,12 +564,21 @@ class MedicApplication(Gtk.Application):
         request["clear_dirty"] = clear.get_active()
         dialog.destroy()
         if answer == Gtk.ResponseType.OK:
-            self.submit(lambda: client.repair(request), lambda result: self.checked([result]))
+            def repaired(result):
+                self.checked([result])
+                level = "info" if result.get("repair", {}).get("status") == "success" else "error"
+                if result.get("mount", {}).get("state") == "failed":
+                    level = "warn"
+                self.show_feedback("Repair finished.\n" + result.get("next_steps", check_result_text([result])), level)
+            self.submit(lambda: client.repair(request), repaired)
 
     def mount(self, button):
         row = self.selected()
         if row and self.confirmation("Mount this drive?", drive_description(row["volume"])):
-            self.submit(lambda: client.udisks_operation(row["volume"]["id"], "Mount"), lambda result: self.refresh())
+            def mounted(result):
+                self.refresh()
+                self.show_feedback("Drive mounted.\n" + (row["volume"].get("label") or "NTFS drive"))
+            self.submit(lambda: client.udisks_operation(row["volume"]["id"], "Mount"), mounted)
 
     def unmount(self, button):
         row = self.selected()
@@ -509,9 +588,15 @@ class MedicApplication(Gtk.Application):
 
         def unmount_and_check():
             client.udisks_operation(key, "Unmount")
-            return client.call({"op": "check", "id": key})
+            try:
+                return client.call({"op": "check", "id": key})
+            except MedicError as error:
+                raise MedicError(f"Drive unmounted, but checking failed: {error}") from error
 
-        self.submit(unmount_and_check, self.checked)
+        def completed(reports):
+            self.checked(reports)
+            self.show_feedback("Drive unmounted. Check complete.\n" + check_result_text(reports), check_result_level(reports))
+        self.submit(unmount_and_check, completed)
 
     def details(self, button):
         row = self.selected()
@@ -519,36 +604,37 @@ class MedicApplication(Gtk.Application):
             dialogs.drive_diagnostics(self.window, row)
 
     def startup_settings(self, button):
-        from .installer import autostart
-        dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, text="Start after graphical login?")
-        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Disable", Gtk.ResponseType.NO, "Enable", Gtk.ResponseType.YES)
-        result = dialog.run()
-        dialog.destroy()
-        if result in {Gtk.ResponseType.YES, Gtk.ResponseType.NO}:
-            try:
-                autostart(result == Gtk.ResponseType.YES)
-                if result == Gtk.ResponseType.YES:
+        from .installer import autostart, autostart_enabled
+        try:
+            enabled = autostart_enabled()
+            result = dialogs.startup_settings(self.window, enabled)
+            if result is not None and result != enabled:
+                autostart(result)
+                if result:
                     self.watch_in_background()
-            except OSError as error:
-                self.show_error(str(error))
+                self.show_feedback("Start after login " + ("enabled." if result else "disabled."))
+        except (OSError, MedicError) as error:
+            self.show_error(str(error))
 
     def show_error(self, message):
-        if self.window and self.window.get_visible():
+        if self.window and self.window.get_visible() or self.update_dialog and self.update_dialog.get_visible():
             self.progress.set_text(message)
+            self.show_feedback(message, "error")
         elif self.preferences.changed("application", message):
-            self.notify("application", "Mount Medic needs attention", message)
+            self.notify("application", "Mount Medic needs attention", message, level="error")
 
     def notification_error(self, message):
-        if self.window and self.window.get_visible():
+        if self.window and self.window.get_visible() or self.update_dialog and self.update_dialog.get_visible():
             self.progress.set_text(message)
+            self.show_feedback(message, "error")
         else:
             print(message)
 
-    def notify(self, key, title, body, *, actions=(), on_sent=None):
+    def notify(self, key, title, body, *, actions=(), on_sent=None, level="info"):
         try:
             if self.notifications is None:
                 self.notifications = Notifications(self.preferences, self.notification_action, self.notification_error)
-            self.notifications.show(key, title, body, actions=actions, on_sent=on_sent)
+            self.notifications.show(key, title, body, actions=actions, on_sent=on_sent, level=level)
         except (GLib.Error, MedicError, OSError) as error:
             self.notification_error(str(error))
 
@@ -667,6 +753,11 @@ class MedicApplication(Gtk.Application):
             result = updates.status(self.preferences)
             if self.update_dialog:
                 self.update_dialog.set_status(result)
+            if manual:
+                if not succeeded:
+                    self.show_feedback("Update check failed.\n" + (result.get("error") or "Try again later."), "error")
+                else:
+                    self.show_feedback("Update check complete.\n" + (f"Version {result['available']} is available." if result["available"] else "You’re up to date."))
             if succeeded and result["available"]:
                 self.update_candidate = result["release"]
                 if not manual and updates.notification_due(self.preferences, self.update_candidate):
@@ -686,10 +777,14 @@ class MedicApplication(Gtk.Application):
     def ignore_update(self, button=None):
         candidate = self.update_candidate if button is None else self.update_dialog.release
         if candidate:
-            updates.ignore(self.preferences, candidate["version"])
-            self.close_notification("update:" + candidate["version"])
-            if self.update_dialog:
-                self.update_dialog.set_status(updates.status(self.preferences))
+            try:
+                updates.ignore(self.preferences, candidate["version"])
+                self.close_notification("update:" + candidate["version"])
+                if self.update_dialog:
+                    self.update_dialog.set_status(updates.status(self.preferences))
+                self.show_feedback(f"Version {candidate['version']} ignored.")
+            except (MedicError, OSError) as error:
+                self.show_error(str(error))
 
     def install_update(self, button=None):
         if self.updating:
@@ -710,10 +805,14 @@ class MedicApplication(Gtk.Application):
         self.close_notification("update:" + candidate["version"])
         # A separate user process survives this application's coordinated shutdown.
         script = "import sys; sys.path.insert(0, '/usr/local/lib/mount-medic'); from mount_medic.updates import main; raise SystemExit(main())"
-        self.preferences.state.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with (self.preferences.state / "update.log").open("w") as log:
-            process = subprocess.Popen(["/usr/bin/python3", "-IB", "-c", script, candidate["version"], candidate["sha256"],
-                                       "--restart", mode], stdout=log, stderr=log, start_new_session=True)
+        try:
+            self.preferences.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with (self.preferences.state / "update.log").open("w") as log:
+                process = subprocess.Popen(["/usr/bin/python3", "-IB", "-c", script, candidate["version"], candidate["sha256"],
+                                           "--restart", mode], stdout=log, stderr=log, start_new_session=True)
+        except OSError as error:
+            self.show_error(str(error))
+            return
         self.updating = True
         def completed():
             if process.poll() is None:
@@ -727,21 +826,26 @@ class MedicApplication(Gtk.Application):
         GLib.timeout_add(500, completed)
         if self.window:
             self.progress.set_text(f"Installing {candidate['version']}… The app will restart when finished.")
+        self.show_feedback(f"Installing version {candidate['version']}…\nThe app will restart when finished.")
 
     def setup_indicator(self):
         tray_icon = BUS_NAME + "-symbolic"
+        try:
+            icon_path = appearance.tray_icon_path()
+        except OSError:
+            icon_path = appearance.ASSETS
         for name in ("AyatanaAppIndicator3", "AppIndicator3"):
             try:
                 gi.require_version(name, "0.1")
                 import importlib
                 library = importlib.import_module("gi.repository." + name)
                 self.indicator = library.Indicator.new("mount-medic", tray_icon, library.IndicatorCategory.HARDWARE)
-                self.indicator.set_icon_theme_path(str(appearance.ASSETS))
+                self.indicator.set_icon_theme_path(str(icon_path))
                 self.indicator.set_icon_full(tray_icon, "Mount Medic")
                 self.indicator.set_status(library.IndicatorStatus.ACTIVE)
                 menu = Gtk.Menu()
                 for title, callback in (("Open Mount Medic", lambda item: self.activate()),
-                                        ("Check now", lambda item: self.submit(lambda: client.call({"op": "check"}), self.checked)),
+                                        ("Check now", self.check_from_tray),
                                         ("Quit", lambda item: self.quit())):
                     item = Gtk.MenuItem(label=title)
                     item.connect("activate", callback)

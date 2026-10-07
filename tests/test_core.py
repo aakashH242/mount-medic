@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 from mount_medic import cli, client
 from mount_medic.discovery import VolumeUnavailable, discover, hardware_identity, parse_devices, udev_filesystem_metadata
@@ -106,6 +107,16 @@ class ProtocolTests(unittest.TestCase):
 
     def test_admin_operation_requests_authentication(self):
         self.assertEqual(authorization({"op": "repair"})[1], 1)
+
+    def test_polkit_still_requires_authentication_for_new_admin_approvals(self):
+        policy = ElementTree.parse(Path(__file__).resolve().parents[1] / "integration/io.github.aakashH242.mount-medic.policy")
+        defaults = {action.attrib["id"].rsplit(".", 1)[1]:
+                    {entry.tag: entry.text for entry in action.find("defaults")}
+                    for action in policy.getroot().findall("action")}
+        self.assertEqual(defaults, {
+            "inspect": {"allow_any": "no", "allow_inactive": "no", "allow_active": "yes"},
+            "admin": {"allow_any": "auth_admin", "allow_inactive": "auth_admin", "allow_active": "auth_admin"},
+        })
 
     def test_injected_argument_rejected(self):
         with self.assertRaises(MedicError):

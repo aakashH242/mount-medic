@@ -173,7 +173,7 @@ class UpdateTests(unittest.TestCase):
             with patch.object(sys, "argv", ["update", TARGET_VERSION, metadata()["sha256"], "--restart", "gui"]), patch.dict(sys.modules, {"mount_medic.notifications": notifications}):
                 self.assertEqual(updates.main(), 2)
             self.assertIn("Package query timed out", self.preferences.updates()["install_error"])
-            notifications.Notifications.return_value.message.assert_called_once_with("Mount Medic update failed", self.preferences.updates()["install_error"])
+            notifications.desktop_message.assert_called_once_with("Mount Medic update failed", self.preferences.updates()["install_error"], "error")
 
     def test_declined_authentication_restarts_previous_app(self):
         with patch("os.geteuid", return_value=1000), patch.object(Path, "is_file", return_value=True), patch("mount_medic.updates.download_archive", return_value=Path("/tmp/archive")), patch("mount_medic.updates.stop_desktop", return_value=10), patch("mount_medic.updates.worker_running", return_value=False), patch("mount_medic.installer.elevated", side_effect=lambda command: command), patch("mount_medic.updates.subprocess.run", return_value=Mock(returncode=126)) as run, patch("mount_medic.updates.subprocess.Popen") as restart:

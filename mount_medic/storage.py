@@ -5,14 +5,22 @@ from pathlib import Path
 import tempfile
 
 from .model import MedicError
+from .protocol import authorization_hours
 
 DEFAULT_NOTIFICATION_SECONDS = 10
+DEFAULT_TOAST_SECONDS = 3
 MAX_NOTIFICATION_SECONDS = 600
 
 
 def notification_seconds(value) -> int:
     if type(value) is not int or not 1 <= value <= MAX_NOTIFICATION_SECONDS:
         raise MedicError(f"Notification duration must be a whole number from 1 to {MAX_NOTIFICATION_SECONDS} seconds")
+    return value
+
+
+def notification_sound(value) -> bool:
+    if type(value) is not bool:
+        raise MedicError("Notification sound must be enabled or disabled")
     return value
 
 
@@ -71,10 +79,35 @@ class Preferences:
         value = read_json(self.config / "preferences.json").get("notification_seconds", DEFAULT_NOTIFICATION_SECONDS)
         return notification_seconds(value)
 
-    def set_notification_seconds(self, value: int) -> None:
+    def authorization_hours(self) -> int:
+        return authorization_hours(read_json(self.config / "preferences.json").get("authorization_hours", 1))
+
+    def set_authorization_hours(self, value: int) -> None:
+        value = authorization_hours(value)
         path = self.config / "preferences.json"
         saved = read_json(path)
-        saved["notification_seconds"] = notification_seconds(value)
+        saved["authorization_hours"] = value
+        atomic_json(path, saved)
+
+    def set_notification_seconds(self, value: int) -> None:
+        self.set_notification_settings({"notification_seconds": value})
+
+    def toast_seconds(self) -> int:
+        value = read_json(self.config / "preferences.json").get("toast_seconds", DEFAULT_TOAST_SECONDS)
+        return notification_seconds(value)
+
+    def notification_sound_enabled(self) -> bool:
+        value = read_json(self.config / "preferences.json").get("notification_sound", True)
+        return notification_sound(value)
+
+    def set_notification_settings(self, settings: dict) -> None:
+        path = self.config / "preferences.json"
+        saved = read_json(path)
+        changes = {key: notification_seconds(value) for key, value in settings.items()
+                   if key in {"notification_seconds", "toast_seconds"}}
+        if "notification_sound" in settings:
+            changes["notification_sound"] = notification_sound(settings["notification_sound"])
+        saved.update(changes)
         atomic_json(path, saved)
 
     def updates(self) -> dict:

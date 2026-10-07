@@ -1,4 +1,5 @@
 import json
+from functools import cache
 import os
 from pathlib import Path
 
@@ -8,23 +9,41 @@ from .model import MedicError, diagnosis
 from .protocol import BUS_NAME, BUS_PATH, INTERFACE, validate
 
 
+@cache
+def system_bus():
+    from gi.repository import Gio
+    # Keep this connection alive so approval belongs to the running app until Quit.
+    return Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+
+
 def call(request: dict):
     validate(request)
+    if os.geteuid() != 0 and request["op"] in {"configure", "repair"}:
+        from .storage import Preferences
+        request = {**request, "auth_hours": Preferences().authorization_hours()}
     if os.geteuid() == 0:
+        if request["op"] == "forget_authorization":
+            return {"forgotten": True}
         from .engine import Engine
         from .worker import secure_state
         secure_state()
         return Engine().dispatch(int(os.environ.get("SUDO_UID", "0")), request)
     try:
         from gi.repository import Gio, GLib
-        connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        connection = system_bus()
+        flags = Gio.DBusCallFlags.NO_AUTO_START if request["op"] == "forget_authorization" else Gio.DBusCallFlags.NONE
+        timeout = 10000 if request["op"] == "forget_authorization" else 2_147_483_647
         reply = connection.call_sync(BUS_NAME, BUS_PATH, INTERFACE, "Call",
                                      GLib.Variant("(s)", (json.dumps(request),)), GLib.VariantType("(s)"),
-                                     Gio.DBusCallFlags.NONE, 2_147_483_647, None)
+                                     flags, timeout, None)
         return json.loads(reply.unpack()[0])
     except (ImportError, ValueError) as error:
         raise MedicError("The desktop bridge is unavailable; run mount-medic doctor") from error
     except Exception as error:
+        if request["op"] == "forget_authorization" and isinstance(error, GLib.Error) and (
+                error.matches(Gio.dbus_error_quark(), Gio.DBusError.SERVICE_UNKNOWN) or
+                error.matches(Gio.dbus_error_quark(), Gio.DBusError.NAME_HAS_NO_OWNER)):
+            return {"forgotten": True}
         raise MedicError(str(error)) from error
 
 
@@ -53,7 +72,7 @@ def udisks_operation(volume_id: str, operation: str, background: bool = False) -
     if operation == "Mount":
         call({"op": "prepare_mount", "id": volume_id, "background": background})
     volume = resolve(volume_id)
-    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    bus = system_bus()
     managed = bus.call_sync("org.freedesktop.UDisks2", "/org/freedesktop/UDisks2",
                            "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", None,
                            GLib.VariantType("(a{oa{sa{sv}}})"), Gio.DBusCallFlags.NONE, 15000, None).unpack()[0]

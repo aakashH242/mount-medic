@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import traceback
 import time
@@ -11,6 +12,35 @@ sys.path.insert(0, "/usr/local/lib/mount-medic")
 
 def phase(name):
     Path.home().joinpath("desktop-phase").write_text(name)
+
+
+def admin_authorization():
+    from gi.repository import Gio, GLib
+    from mount_medic.protocol import BASE_ACTION
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    subject = ("system-bus-name", {"name": GLib.Variant("s", bus.get_unique_name())})
+    return bus.call_sync("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority",
+                         "org.freedesktop.PolicyKit1.Authority", "CheckAuthorization",
+                         GLib.Variant("((sa{sv})sa{ss}us)", (subject, BASE_ACTION + "admin", {}, 0, "")),
+                         GLib.VariantType("((bba{ss}))"), Gio.DBusCallFlags.NONE, 10000, None).unpack()[0]
+
+
+def verify_temporary_authorization(request):
+    from mount_medic import client
+    assert not admin_authorization()[0], "approval must belong to Mount Medic's worker, not a wider polkit cache"
+    assert client.call({**request, "auto_mount": False})["auto_mount"] is False
+    assert client.call(request)["auto_mount"] is True
+    phase("AUTH_REUSED")
+    time.sleep(36)  # Approval must survive the worker's normal 30-second idle exit.
+    assert client.call(request)["auto_mount"] is True
+    phase("AUTH_OTHER_CANCEL")
+    code = "import json,sys; from mount_medic import client; client.call(json.loads(sys.argv[1]))"
+    fresh = subprocess.run([sys.executable, "-c", code, json.dumps(request)], capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "PYTHONPATH": "/usr/local/lib/mount-medic"})
+    assert fresh.returncode and "denied or cancelled" in fresh.stderr, fresh
+    assert client.call(request)["auto_mount"] is True, "other caller's cancellation affected this app's approval"
+    assert client.call({"op": "forget_authorization"})["forgotten"]
+    print("PASS: native admin approval reused; fresh process challenged; explicit revocation effective", flush=True)
 
 
 def hotplug_window(key):
@@ -117,12 +147,14 @@ def main():
     except MedicError as error:
         assert "denied or cancelled" in str(error), error
     assert next(row for row in client.call({"op": "list"}) if row["volume"]["id"] == key)["settings"]["auto_repair"]
+    assert not admin_authorization()[0], "cancelled authentication retained approval"
     phase("AUTH_ACCEPT")
     assert client.call(request)["auto_repair"] is False
+    verify_temporary_authorization(request)
     hotplug_window(key)
     return {"passed": True, "session": os.environ.get("XDG_SESSION_TYPE"),
             "desktop": os.environ.get("XDG_CURRENT_DESKTOP"),
-            "checks": "D-Bus, polkit cancel/accept, automatic repair plus noninteractive UDisks, user file access, native window, hotplug/reconnect/replacement, unmanaged replacement not probed, notification enrollment action"}
+            "checks": "D-Bus, polkit cancel/accept/reuse/revoke and process isolation, automatic repair plus noninteractive UDisks, user file access, native window, hotplug/reconnect/replacement, unmanaged replacement not probed, notification enrollment action"}
 
 
 if __name__ == "__main__":

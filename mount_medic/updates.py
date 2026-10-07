@@ -195,17 +195,21 @@ def main() -> int:
         release = fetch_release(args.version)
         if release["sha256"] != args.sha256:
             raise MedicError("The selected update changed; check again before installing")
-        print(install(release, args.restart))
+        result = install(release, args.restart)
+        print(result)
+        if args.restart:
+            from .notifications import desktop_message
+            desktop_message("Mount Medic updated", f"Version {result['updated']} installed.")
         return 0
     except (MedicError, ReleaseError, OSError, ImportError) as error:
         print(f"Mount Medic update: {error}", file=sys.stderr)
         if args.restart:
             try:
                 Preferences().save_updates({"install_error": str(error)})
-                from .notifications import Notifications
-                Notifications(Preferences(), lambda action, key: None, print).message("Mount Medic update failed", str(error))
             except Exception as report_error:
                 print(f"Could not report update failure: {report_error}", file=sys.stderr)
+            from .notifications import desktop_message
+            desktop_message("Mount Medic update failed", str(error), "error")
         return 2
 
 

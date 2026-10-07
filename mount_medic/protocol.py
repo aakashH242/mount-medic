@@ -16,14 +16,22 @@ SCHEMAS = {
     "automatic": {"id": str},
     "repair": {"id": str, "clear_dirty": bool, "retry": bool},
     "prepare_mount": {"id": str, "background": bool},
+    "forget_authorization": {},
 }
+
+
+def authorization_hours(value) -> int:
+    if type(value) is not int or not 1 <= value <= 24:
+        raise MedicError("Remembered approval must be a whole number from 1 to 24 hours")
+    return value
 
 
 def validate(request: dict) -> dict:
     if not isinstance(request, dict) or not isinstance(request.get("op"), str) or request["op"] not in SCHEMAS:
         raise MedicError("Unknown request")
     schema = SCHEMAS[request["op"]]
-    if set(request) - {"op", *schema}:
+    optional = {"auth_hours"} if request["op"] in {"configure", "repair"} else set()
+    if set(request) - {"op", *schema, *optional}:
         raise MedicError("Unexpected request fields")
     for name, expected in schema.items():
         if name not in request and request["op"] == "check":
@@ -34,6 +42,8 @@ def validate(request: dict) -> dict:
         raise MedicError("Use a volume ID from mount-medic list")
     if request["op"] == "configure" and request["auto_repair"] and not request["monitor"]:
         raise MedicError("Enable monitoring before automatic repair")
+    if "auth_hours" in request:
+        authorization_hours(request["auth_hours"])
     return request
 
 

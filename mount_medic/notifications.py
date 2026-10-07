@@ -9,6 +9,14 @@ PATH = "/org/freedesktop/Notifications"
 DISCOVERY_ACTIONS = ("monitor", "Monitor", "ignore", "Ignore This Drive")
 
 
+def desktop_message(title, body, level="info"):
+    from .storage import Preferences
+    try:
+        Notifications(Preferences(), lambda action, key: None, print).message(title, body, level=level)
+    except Exception as error:
+        print(f"Could not send desktop message: {error}")
+
+
 class Notifications:
     def __init__(self, preferences, on_action, on_error):
         self.preferences = preferences
@@ -23,15 +31,15 @@ class Notifications:
         self.proxy.connect("g-signal", self.signal)
         self.proxy.connect("notify::g-name-owner", self.owner_changed)
 
-    def show(self, key, title, body, *, actions=(), on_sent=None):
+    def show(self, key, title, body, *, actions=(), on_sent=None, level="info"):
         if key in self.preferences.ignored():
             return
         self.close(key)
         seconds = self.preferences.notification_seconds()
+        parameters = self.parameters(title, body, ["default", "Open Mount Medic", *actions], level=level)
         entry = {"id": None, "timer": None, "owner": self.owner, "generation": self.generation,
                  "actions": {"default", *actions[::2]}}
         self.active[key] = entry
-        parameters = self.parameters(title, body, ["default", "Open Mount Medic", *actions])
 
         def sent(proxy, result, unused):
             try:
@@ -57,15 +65,22 @@ class Notifications:
 
         self.proxy.call("Notify", parameters, Gio.DBusCallFlags.NONE, 3000, None, sent, None)
 
-    def parameters(self, title, body, actions):
+    def parameters(self, title, body, actions, *, level="info"):
+        icon = {"info": str(ASSETS / f"{BUS_NAME}.png"), "warn": "dialog-warning", "error": "dialog-error"}[level]
+        sound = self.preferences.notification_sound_enabled()
+        hints = {"desktop-entry": GLib.Variant("s", BUS_NAME), "transient": GLib.Variant("b", True),
+                 "urgency": GLib.Variant("y", {"info": 1, "warn": 1, "error": 2}[level]),
+                 "suppress-sound": GLib.Variant("b", not sound)}
+        if sound:
+            hints["sound-name"] = GLib.Variant("s", "message-new-instant")
         return GLib.Variant("(susssasa{sv}i)", (
-            "Mount Medic", 0, str(ASSETS / f"{BUS_NAME}.png"), title, GLib.markup_escape_text(body), actions,
-            {"desktop-entry": GLib.Variant("s", BUS_NAME), "transient": GLib.Variant("b", True)},
+            "Mount Medic", 0, icon, title, GLib.markup_escape_text(body), actions,
+            hints,
             self.preferences.notification_seconds() * 1000))
 
-    def message(self, title, body):
+    def message(self, title, body, *, level="info"):
         # A short-lived updater must send before exiting without owning the application's D-Bus name.
-        self.proxy.call_sync("Notify", self.parameters(title, body, []), Gio.DBusCallFlags.NONE, 3000, None)
+        self.proxy.call_sync("Notify", self.parameters(title, body, [], level=level), Gio.DBusCallFlags.NONE, 3000, None)
 
     def close_remote(self, entry):
         if entry["id"] and entry["owner"]:

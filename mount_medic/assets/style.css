@@ -57,7 +57,15 @@
 .mount-medic button.primary-action:hover { background-color: shade(@medic_accent, 1.12); }
 .mount-medic button.primary-action:active { background-color: shade(@medic_accent, 0.85); }
 .mount-medic button.primary-action:disabled { opacity: 0.5; color: @medic_on_accent; }
-.mount-medic button:focus, .mount-medic treeview:focus, .mount-medic expander:focus {
+.mount-medic switch {
+  background-image: none;
+  background-color: alpha(@theme_fg_color, 0.20);
+  border-color: @medic_border;
+}
+.mount-medic switch:checked { background-color: @medic_accent; border-color: @medic_accent; }
+.mount-medic switch slider { background-image: none; background-color: @theme_fg_color; }
+.mount-medic switch:checked slider { background-color: @medic_on_accent; }
+.mount-medic button:focus, .mount-medic treeview:focus, .mount-medic expander:focus, .mount-medic switch:focus {
   outline-style: solid;
   outline-width: 2px;
   outline-offset: -3px;
@@ -65,3 +73,7 @@
 }
 .mount-medic button.primary-action:focus { outline-color: @medic_on_accent; }
 .mount-medic .empty-state { padding: 32px; }
+.mount-medic infobar.toast { background-image: none; background-color: @theme_base_color; border-left: 4px solid @medic_accent; }
+.mount-medic infobar.toast label { color: @theme_fg_color; }
+.mount-medic infobar.toast.warning { border-left-color: #c18a28; }
+.mount-medic infobar.toast.error { border-left-color: #c64d50; }

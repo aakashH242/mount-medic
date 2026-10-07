@@ -32,7 +32,7 @@ Alternatively, from a checkout:
 ./install.sh
 ```
 
-Review the summary, enter your administrator password when asked, and choose your notification duration (default **10 seconds**) and whether the app starts after login. **On Arch, installing missing packages includes a full system upgrade.**
+Review the summary, enter your administrator password when asked, and choose your notification, security, and startup preferences. Notification sounds are on by default, and admin approval lasts **1 hour**. You can change these later in Settings. **On Arch, installing missing packages includes a full system upgrade.**
 
 Nothing is enrolled, inspected, repaired, or mounted during installation. Once installed, open **Mount Medic** from your application menu.
 
@@ -45,7 +45,7 @@ For manual setup or distributions without a built-in package command, the requir
 
 `pip install` only installs the Python CLI; use the guided installer for the native probe and privileged integration. Run `mount-medic doctor --json` to inspect dependencies and service availability.
 
-Installed code lives in `/usr/local/lib/mount-medic`; the launcher is `/usr/local/bin/mount-medic`. Integration consists of a system D-Bus activation file, its access policy, and two application-specific polkit actions. The root worker exits after 30 seconds idle. There is no permanent root daemon or general passwordless command grant.
+Installed code lives in `/usr/local/lib/mount-medic`; the launcher is `/usr/local/bin/mount-medic`. Integration consists of a system D-Bus activation file, its access policy, and two application-specific polkit actions. The root worker exits after 30 seconds idle once remembered approvals end. There is no permanent root daemon or general passwordless command grant.
 
 Without D-Bus/polkit, local discovery remains available. An administrator can explicitly run the installed CLI with `sudo` for manual operations. Unattended repair needs the installed worker and an active local desktop session. Headless GUI requests fail with a CLI fallback message.
 
@@ -56,6 +56,8 @@ On Alpine/OpenRC, desktop authorization requires `polkit-elogind`, a running `el
 ## Use
 
 Open **Mount Medic** from your application menu and select a drive. Enable monitoring if you want background checks; automatic repair and mounting are separate choices and are off by default.
+
+Enter your administrator password once when changing drive permissions or requesting a repair. Approval lasts for **1 hour**, or until you quit Mount Medic. Choose **1–24 hours** during setup or in **Settings → Security**. Closing the window keeps approval while the tray app runs. Mount Medic never saves your password; installing updates and some system mount actions can ask separately.
 
 ### Command line
 
@@ -84,6 +86,8 @@ mount-medic watch                                          # Start the session w
 ```
 
 Checks, automatic repair, and automatic mounting are separate permissions. Changing write permissions requires confirmation and administrator authentication. Only enable automatic actions for drives you intend to manage.
+
+Each CLI command starts a new process, so it can ask for your password again. For several manual commands in the same terminal, use `sudo mount-medic ...`; sudo remembers your approval for its usual short period.
 
 #### Repair and mounting
 
@@ -118,7 +122,13 @@ Add `--json` for output you can use in scripts. Checks return **0** when no atte
 
 The [Mount Medic skill](skill/SKILL.md) works **without installing the app or downloading its source code**. It includes read-only inspection, native Linux recovery guidance, and manual Windows/VM instructions. If the app is installed, the agent can use its guarded CLI.
 
-Install the complete [`skill/` folder](skill) with your agent's skill installer. For Codex, ask:
+Install directly from GitHub with the Skills CLI (requires Node.js/npm):
+
+```sh
+npx skills add aakashH242/mount-medic --skill mount-medic
+```
+
+Alternatively, install the complete [`skill/` folder](skill) with your agent's skill installer. For Codex, ask:
 
 ```text
 Use $skill-installer to install https://github.com/aakashH242/mount-medic/tree/main/skill as mount-medic.
@@ -130,7 +140,11 @@ The helper uses Python 3.8+ and existing Linux utilities; native commands are al
 
 ## Startup and notifications
 
-Choose login startup and notification duration in **Settings**. New drives stay unmanaged until you enable monitoring; **Ignore This Drive** suppresses discovery notifications until you remove the entry from **Ignore List**. Ignoring a drive never grants repair or mounting permission.
+Choose login startup and message durations in **Settings**. In-app confirmations close after 3 seconds by default; desktop notifications use 10 seconds. You can change both during installation or under **Settings → Notifications**. New drives stay unmanaged until you enable monitoring; **Ignore This Drive** suppresses discovery notifications until you remove the entry from **Ignore List**. Ignoring a drive never grants repair or mounting permission.
+
+Notification sounds are on by default. Turn off **Play notification sounds** during setup or in **Settings → Notifications** for quiet alerts. Sounds follow your desktop settings, including Do Not Disturb.
+
+**Check now** in the tray reports its result in a notification without opening the window. In the app, checks and saved changes show a brief confirmation, with warnings and errors marked clearly.
 
 **Closing the window keeps the app running in the background.** Reopen it from the launcher or tray; use **Settings → Quit Mount Medic** or the tray's **Quit** to stop it. Quitting does not change login startup or saved drive permissions. Background actions never request administrator authentication.
 

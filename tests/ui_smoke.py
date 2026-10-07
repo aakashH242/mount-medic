@@ -159,12 +159,12 @@ def drive_flows(app, volume, output, sent):
     sent.reset_mock()
     app.render([row])
     app.render([row])
-    assert sent.call_count == 1 and app.store[0][5] == "Not added"
+    assert sent.call_count == 1 and app.store[0][5] == "Not added\nAuto-repair off\nAuto-mount off"
     app.render([])
     app.render([row])
     assert sent.call_count == 2, "reconnection should offer the dismissed drive again"
     app.notification_action("ignore", key)
-    assert key in Preferences().ignored() and app.store[0][5] == "Ignored"
+    assert key in Preferences().ignored() and app.store[0][5] == "Ignored\nAuto-repair off\nAuto-mount off"
     app.render([])
     app.render([row])
     assert sent.call_count == 2, "ignore must survive reconnection"
@@ -243,7 +243,7 @@ def drive_flows(app, volume, output, sent):
     assert key not in app.preferences.ignored()
     row["settings"] = permissions
     app.render([row])
-    assert app.store[0][5] == "Added" and app.buttons["Monitor"].get_label() == "Remove"
+    assert app.store[0][5] == "Added\nAuto-repair on\nAuto-mount on" and app.buttons["Monitor"].get_label() == "Remove"
     assert not app.buttons["Ignore This Drive"].get_sensitive()
     with patch.object(app, "confirmation", return_value=False), patch("mount_medic.client.call", side_effect=AssertionError("cancelled removal wrote settings")):
         app.manage_selected(None)
@@ -278,15 +278,24 @@ def drive_flows(app, volume, output, sent):
     app.ignored_drives(None)
     assert not failures, failures
     assert key not in app.preferences.ignored() and other["id"] in app.preferences.ignored()
-    assert app.store[0][5] == "Not added"
+    assert app.store[0][5] == "Not added\nAuto-repair off\nAuto-mount off"
     app.preferences.unignore(other["id"])
 
     def duration(dialog):
-        spin = next(item for item in widgets(dialog) if isinstance(item, Gtk.SpinButton))
+        spins = [item for item in widgets(dialog) if isinstance(item, Gtk.SpinButton)]
+        spin, toast = spins
         assert spin.get_value_as_int() == 10
+        assert toast.get_value_as_int() == 3
         assert "1–600 seconds" in spin.get_tooltip_text()
         assert spin.get_tooltip_text() == spin.get_accessible().get_description()
+        sound = next(item for item in widgets(dialog) if isinstance(item, Gtk.CheckButton))
+        assert sound.get_active() and sound.get_accessible().get_name() == "Play notification sounds"
+        sound.grab_focus()
+        assert dialog.get_focus() is sound
+        capture(dialog, output.with_stem(output.stem + "-settings-sound-on"))
         spin.set_value(23)
+        toast.set_value(7)
+        sound.set_active(False)
         capture(dialog, output.with_stem(output.stem + "-settings"))
         return Gtk.ResponseType.OK
 
@@ -294,9 +303,74 @@ def drive_flows(app, volume, output, sent):
     app.notification_settings(None)
     assert not failures, failures
     assert Preferences().notification_seconds() == 23
-    respond("Notification settings", lambda dialog: Gtk.ResponseType.CANCEL)
+    assert Preferences().toast_seconds() == 7
+    assert not Preferences().notification_sound_enabled()
+    def cancel_sound(dialog):
+        sound = next(item for item in widgets(dialog) if isinstance(item, Gtk.CheckButton))
+        assert not sound.get_active()
+        sound.set_active(True)
+        return Gtk.ResponseType.CANCEL
+    respond("Notification settings", cancel_sound)
     app.notification_settings(None)
     assert Preferences().notification_seconds() == 23
+    assert not Preferences().notification_sound_enabled()
+    assert not failures, failures
+
+    def security(dialog):
+        spin = next(item for item in widgets(dialog) if isinstance(item, Gtk.SpinButton))
+        assert spin.get_value_as_int() == 1
+        assert spin.get_adjustment().get_lower() == 1 and spin.get_adjustment().get_upper() == 24
+        assert spin.get_accessible().get_name() == "Remember administrator approval"
+        spin.grab_focus()
+        assert dialog.get_focus() is spin
+        capture(dialog, output.with_stem(output.stem + "-security"))
+        spin.set_value(24)
+        return Gtk.ResponseType.OK
+
+    with patch.object(app, "submit", side_effect=lambda operation, callback: callback(operation())), \
+            patch("mount_medic.desktop.client.call", return_value={"forgotten": True}) as revoke:
+        respond("Security settings", security)
+        app.security_settings(None)
+        assert Preferences().authorization_hours() == 24
+        revoke.assert_called_once_with({"op": "forget_authorization"})
+        revoke.reset_mock()
+        respond("Security settings", lambda dialog: Gtk.ResponseType.OK)
+        app.security_settings(None)
+        revoke.assert_not_called()
+        respond("Security settings", lambda dialog: Gtk.ResponseType.CANCEL)
+        app.security_settings(None)
+        assert Preferences().authorization_hours() == 24
+        revoke.assert_not_called()
+    assert not failures, failures
+
+    def startup(dialog, enabled, chosen, answer):
+        toggle = next(item for item in widgets(dialog) if isinstance(item, Gtk.Switch))
+        assert toggle.get_active() == enabled
+        assert toggle.get_accessible().get_name() == "Start after login"
+        toggle.grab_focus()
+        assert dialog.get_focus() is toggle
+        toggle.set_active(chosen)
+        for unused in range(3):
+            settle()
+        capture(dialog, output.with_stem(output.stem + "-startup-" + ("on" if chosen else "off")))
+        return answer
+
+    for enabled, chosen, answer in ((False, True, Gtk.ResponseType.CANCEL),
+                                     (True, True, Gtk.ResponseType.OK),
+                                     (False, True, Gtk.ResponseType.OK),
+                                     (True, False, Gtk.ResponseType.OK)):
+        respond("Startup settings", lambda dialog: startup(dialog, enabled, chosen, answer))
+        with patch("mount_medic.installer.autostart_enabled", return_value=enabled), patch("mount_medic.installer.autostart") as save, patch.object(app, "watch_in_background") as watch:
+            app.startup_settings(None)
+            assert not failures, failures
+            changed = answer == Gtk.ResponseType.OK and chosen != enabled
+            assert save.call_args.args == (chosen,) if changed else save.call_count == 0
+            assert watch.call_count == int(changed and chosen)
+    respond("Startup settings", lambda dialog: startup(dialog, False, True, Gtk.ResponseType.OK))
+    with patch("mount_medic.installer.autostart_enabled", return_value=False), patch("mount_medic.installer.autostart", side_effect=OSError("Synthetic startup write failure")), patch.object(app, "watch_in_background") as watch:
+        app.startup_settings(None)
+        assert "Synthetic startup write failure" in app.progress.get_text()
+        assert watch.call_count == 0
     assert not failures, failures
 
     app.selection.select_path(Gtk.TreePath.new_from_indices([0]))
@@ -360,7 +434,7 @@ def window_lifecycle(app, tray):
                               GLib.Variant("(ss)", ("org.kde.StatusNotifierItem", "Status")), None,
                               Gio.DBusCallFlags.NONE, 1000, None, received, None)
             app.show_error("Background check needs attention")
-            app.notify.assert_called_with("application", "Mount Medic needs attention", "Background check needs attention")
+            app.notify.assert_called_with("application", "Mount Medic needs attention", "Background check needs attention", level="error")
             events.append("hidden")
             app.device_event()
             GLib.timeout_add(100, reopen)
@@ -420,6 +494,11 @@ def main():
     assert header.get_decoration_layout() == ":minimize,maximize,close"
     assert app.window.get_resizable()
     assert len([item for item in widgets(header) if isinstance(item, Gtk.Image) and item.get_icon_name()[0] == BUS_NAME]) == 1
+    brand_icon = next(item for item in widgets(header) if isinstance(item, Gtk.Image) and item.get_icon_name()[0] == BUS_NAME)
+    brand_title = next(item for item in widgets(header) if isinstance(item, Gtk.Label) and item.get_text() == "Mount Medic")
+    icon_center = brand_icon.translate_coordinates(header, 0, 0)[1] + brand_icon.get_allocated_height() / 2
+    title_center = brand_title.translate_coordinates(header, 0, 0)[1] + brand_title.get_allocated_height() / 2
+    assert abs(icon_center - title_center) <= 2, (icon_center, title_center)
     assert all(item.get_layout().get_unknown_glyphs_count() == 0 for item in widgets(header)
                if isinstance(item, Gtk.Label)), "the test display is missing fonts"
     controls = [item for item in widgets(header) if isinstance(item, Gtk.Button) and item.get_style_context().has_class("titlebutton")]
@@ -467,7 +546,8 @@ def main():
         settle_until(lambda: bool(tray_host.items))
         assert tray_host.items, "indicator did not register with the native tray host"
         assert app.indicator.get_icon() == BUS_NAME + "-symbolic"
-        assert app.indicator.get_icon_theme_path() == str(ASSETS)
+        tray_path = Path(app.indicator.get_icon_theme_path())
+        assert (tray_path / (BUS_NAME + "-symbolic.svg")).read_bytes() == (ASSETS / (BUS_NAME + "-symbolic.svg")).read_bytes()
     tray = Gtk.IconTheme.get_default().lookup_icon(BUS_NAME + "-symbolic", 16, Gtk.IconLookupFlags.FORCE_SIZE)
     for color in ("white", "black"):
         foreground = Gdk.RGBA()
@@ -488,8 +568,11 @@ def main():
     problem.update(actions=["repair"], checked_at=1791277200,
                    settings={"monitor": True, "auto_repair": False, "auto_mount": False})
     rows = [diagnosis(work, "mounted_rw"), problem, diagnosis(removable, "unmanaged")]
+    rows[0]["settings"] = {"monitor": True, "auto_repair": True, "auto_mount": False}
     app.reports[games.key] = {"settings": {"auto_repair": True}}
     app.render(rows)
+    assert app.store[0][5] == "Added\nAuto-repair on\nAuto-mount off"
+    assert app.store[0][5] in app.store[0][4], "tooltips must include the automatic permissions"
     assert app.rows[games.key]["settings"]["auto_repair"] is False
     assert checked_time(10 ** 100) == "—"
     app.selection.select_path(Gtk.TreePath.new_from_indices([1]))
@@ -571,5 +654,5 @@ def main():
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_CONFIG_HOME": directory, "XDG_STATE_HOME": directory}):
+    with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_CONFIG_HOME": directory, "XDG_STATE_HOME": directory, "XDG_CACHE_HOME": directory}):
         main()

@@ -5,8 +5,9 @@ from pathlib import Path
 import time
 
 from .engine import Engine, ROOT_STATE
+from .authorization import Authorizer
 from .model import MedicError
-from .protocol import BUS_NAME, BUS_PATH, INTERFACE, XML, authorization, validate
+from .protocol import BUS_NAME, BUS_PATH, INTERFACE, XML, validate
 
 
 def secure_state() -> None:
@@ -27,23 +28,15 @@ def serve() -> None:
     loop = GLib.MainLoop()
     state = {"busy": False, "last": time.monotonic()}
     connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    authorizer = Authorizer(connection)
 
-    def authorize(sender: str, request: dict) -> int:
-        identity = connection.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus",
-                                        "org.freedesktop.DBus", "GetConnectionUnixUser",
-                                        GLib.Variant("(s)", (sender,)), GLib.VariantType("(u)"),
-                                        Gio.DBusCallFlags.NONE, 10000, None)
-        uid = identity.unpack()[0]
-        action, flags = authorization(request)
-        subject = ("system-bus-name", {"name": GLib.Variant("s", sender)})
-        allowed = connection.call_sync("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority",
-                                       "org.freedesktop.PolicyKit1.Authority", "CheckAuthorization",
-                                       GLib.Variant("((sa{sv})sa{ss}us)", (subject, action, {}, flags, "")),
-                                       GLib.VariantType("((bba{ss}))"), Gio.DBusCallFlags.NONE,
-                                       120000 if flags else 10000, None).unpack()[0][0]
-        if not allowed:
-            raise MedicError("Authorization denied or cancelled")
-        return uid
+    def owner_changed(conn, sender, path, interface, signal, parameters):
+        name, previous, current = parameters.unpack()
+        if name.startswith(":") and previous and not current:
+            authorizer.forget(name)
+
+    subscription = connection.signal_subscribe("org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
+                                               "/org/freedesktop/DBus", None, Gio.DBusSignalFlags.NONE, owner_changed)
 
     def finish(invocation, future):
         try:
@@ -54,7 +47,7 @@ def serve() -> None:
         return False
 
     def execute(sender: str, request: dict):
-        uid = authorize(sender, request)
+        uid = authorizer.authorize(sender, request)
         return engine.dispatch(uid, request)
 
     def call(conn, sender, path, interface, method, parameters, invocation):
@@ -63,6 +56,10 @@ def serve() -> None:
             if len(raw) > 4096:
                 raise MedicError("Request is too large")
             request = validate(json.loads(raw))
+            if request["op"] == "forget_authorization":
+                authorizer.forget(sender)
+                invocation.return_value(GLib.Variant("(s)", (json.dumps({"forgotten": True}),)))
+                return
             if state["busy"]:
                 raise MedicError("Another operation is running; retry when it finishes")
             state["busy"] = True
@@ -76,7 +73,7 @@ def serve() -> None:
     owner = Gio.bus_own_name_on_connection(connection, BUS_NAME, Gio.BusNameOwnerFlags.NONE, None, None)
 
     def idle():
-        if not state["busy"] and time.monotonic() - state["last"] >= 30:
+        if not authorizer.active() and not state["busy"] and time.monotonic() - state["last"] >= 30:
             loop.quit()
             return False
         return True
@@ -87,6 +84,7 @@ def serve() -> None:
     finally:
         pool.shutdown(wait=True)
         connection.unregister_object(registration)
+        connection.signal_unsubscribe(subscription)
         Gio.bus_unown_name(owner)
 
 

@@ -1,10 +1,13 @@
 from contextlib import contextmanager
 from pathlib import Path
 import json
+import os
+import stat
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 from mount_medic import cli, client
 from mount_medic.discovery import VolumeUnavailable, discover, hardware_identity, parse_devices, udev_filesystem_metadata
@@ -104,6 +107,16 @@ class ProtocolTests(unittest.TestCase):
 
     def test_admin_operation_requests_authentication(self):
         self.assertEqual(authorization({"op": "repair"})[1], 1)
+
+    def test_polkit_still_requires_authentication_for_new_admin_approvals(self):
+        policy = ElementTree.parse(Path(__file__).resolve().parents[1] / "integration/io.github.aakashH242.mount-medic.policy")
+        defaults = {action.attrib["id"].rsplit(".", 1)[1]:
+                    {entry.tag: entry.text for entry in action.find("defaults")}
+                    for action in policy.getroot().findall("action")}
+        self.assertEqual(defaults, {
+            "inspect": {"allow_any": "no", "allow_inactive": "no", "allow_active": "yes"},
+            "admin": {"allow_any": "auth_admin", "allow_inactive": "auth_admin", "allow_active": "auth_admin"},
+        })
 
     def test_injected_argument_rejected(self):
         with self.assertRaises(MedicError):
@@ -280,14 +293,22 @@ class EngineTests(unittest.TestCase):
 
 
 class SafetyTests(unittest.TestCase):
-    def test_procfs_socket_does_not_require_socket_getattr(self):
-        with patch("os.readlink", return_value="socket:[925]"), patch.object(Path, "stat", side_effect=PermissionError("SELinux socket getattr")):
-            self.assertEqual(descriptor_device(Path("/proc/1/fd/71")), "")
+    def test_block_descriptor_still_reports_its_device_number(self):
+        with patch("os.readlink", return_value="/dev/example1"), patch.object(Path, "stat") as info:
+            info.return_value.st_mode = stat.S_IFBLK
+            info.return_value.st_rdev = os.makedev(8, 1)
+            self.assertEqual(descriptor_device(Path("/proc/1/fd/71")), "8:1")
+
+    def test_kernel_descriptors_do_not_require_getattr(self):
+        for target in ("socket:[925]", "pipe:[926]", "anon_inode:[io_uring]", "anon_inode:[eventfd]", "anon_inode:inotify"):
+            with self.subTest(target=target), patch("os.readlink", return_value=target), patch.object(Path, "stat", side_effect=PermissionError("SELinux kernel descriptor getattr")):
+                self.assertEqual(descriptor_device(Path("/proc/1/fd/71")), "")
 
     def test_inaccessible_regular_target_still_blocks(self):
-        with patch("os.readlink", return_value="/tmp/socket:[925]"), patch.object(Path, "stat", side_effect=PermissionError("unreadable target")):
-            with self.assertRaises(PermissionError):
-                descriptor_device(Path("/proc/1/fd/71"))
+        for target in ("/tmp/socket:[925]", "/tmp/anon_inode:[io_uring]", "/dev/example1"):
+            with self.subTest(target=target), patch("os.readlink", return_value=target), patch.object(Path, "stat", side_effect=PermissionError("unreadable target")):
+                with self.assertRaises(PermissionError):
+                    descriptor_device(Path("/proc/1/fd/71"))
 
     def test_udev_mount_override_is_rejected(self):
         fstab = subprocess.CompletedProcess([], 1, "", "")

@@ -3,7 +3,8 @@ from gi.repository import Gtk, Pango
 
 from . import appearance
 from .engine import REPAIR_NOTICE
-from .storage import MAX_NOTIFICATION_SECONDS
+from .feedback import Toast
+from .storage import MAX_NOTIFICATION_SECONDS, Preferences
 
 
 class UpdatesDialog(Gtk.Dialog):
@@ -17,6 +18,8 @@ class UpdatesDialog(Gtk.Dialog):
         area = self.get_content_area()
         area.set_border_width(16)
         area.set_spacing(12)
+        self.toast = Toast(Preferences())
+        area.pack_start(self.toast, False, False, 0)
         area.pack_start(appearance.label("Application updates", "section-title"), False, False, 0)
         self.summary = appearance.label("", "muted")
         self.summary.set_max_width_chars(56)
@@ -193,33 +196,94 @@ def drive_permissions(parent, volume, settings):
     return result
 
 
-def notification_settings(parent, seconds):
+def startup_settings(parent, enabled):
+    dialog = Gtk.Dialog(title="Startup settings", transient_for=parent, modal=True, use_header_bar=True)
+    dialog.get_style_context().add_class("mount-medic")
+    dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
+    area = dialog.get_content_area()
+    area.set_border_width(16)
+    area.set_spacing(12)
+    row = Gtk.Box(spacing=24)
+    toggle = Gtk.Switch(active=enabled, valign=Gtk.Align.CENTER)
+    toggle.get_accessible().set_name("Start after login")
+    label = Gtk.Label(label="Start after _login", use_underline=True, xalign=0)
+    label.set_mnemonic_widget(toggle)
+    row.pack_start(label, True, True, 0)
+    row.pack_end(toggle, False, False, 0)
+    area.pack_start(row, False, False, 0)
+    area.pack_start(appearance.label("Keep Mount Medic in the tray after you sign in.", "muted"), False, False, 0)
+    dialog.show_all()
+    result = toggle.get_active() if dialog.run() == Gtk.ResponseType.OK else None
+    dialog.destroy()
+    return result
+
+
+def security_settings(parent, hours):
+    dialog = Gtk.Dialog(title="Security settings", transient_for=parent, modal=True, use_header_bar=True)
+    dialog.get_style_context().add_class("mount-medic")
+    dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
+    area = dialog.get_content_area()
+    area.set_border_width(16)
+    area.set_spacing(12)
+    spin = Gtk.SpinButton.new_with_range(1, 24, 1)
+    spin.set_value(hours)
+    label = Gtk.Label.new_with_mnemonic("_Remember administrator approval (hours)")
+    label.set_mnemonic_widget(spin)
+    label.set_xalign(0)
+    spin.get_accessible().set_name("Remember administrator approval")
+    spin.set_tooltip_text("1–24 hours. Ends when you quit Mount Medic. Your password is never saved.")
+    spin.get_accessible().set_description(spin.get_tooltip_text())
+    area.pack_start(label, False, False, 0)
+    area.pack_start(spin, False, False, 0)
+    help_text = Gtk.Label(label="Closing the window keeps approval while the tray app runs.\nSaving clears current approval; the next password prompt uses this duration.")
+    help_text.set_xalign(0)
+    help_text.set_line_wrap(True)
+    area.pack_start(help_text, False, False, 0)
+    dialog.show_all()
+    result = spin.get_value_as_int() if dialog.run() == Gtk.ResponseType.OK else None
+    dialog.destroy()
+    return result
+
+
+def notification_settings(parent, settings):
     dialog = Gtk.Dialog(title="Notification settings", transient_for=parent, modal=True, use_header_bar=True)
     dialog.get_style_context().add_class("mount-medic")
     dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
     area = dialog.get_content_area()
     area.set_border_width(16)
     area.set_spacing(12)
-    label = Gtk.Label(label="Notification duration (seconds)", xalign=0)
-    duration = Gtk.SpinButton.new_with_range(1, MAX_NOTIFICATION_SECONDS, 1)
-    duration.set_numeric(True)
-    duration.set_value(seconds)
-    duration.get_accessible().set_name("Notification duration in seconds")
-    duration.set_tooltip_text(f"Choose 1–{MAX_NOTIFICATION_SECONDS} seconds. Your desktop may hide notifications sooner "
-                              "or omit their buttons. All drive actions remain available in the window.")
-    duration.get_accessible().set_description(duration.get_tooltip_text())
-    label.set_mnemonic_widget(duration)
-    area.pack_start(label, False, False, 0)
-    area.pack_start(duration, False, False, 0)
-    hint = appearance.label("Default: 10 seconds.", "muted")
-    hint.set_tooltip_text(duration.get_tooltip_text())
+    controls = {}
+    for key, title, name in (("notification_seconds", "Desktop notifications (seconds)", "Notification duration in seconds"),
+                             ("toast_seconds", "In-app messages (seconds)", "In-app message duration in seconds")):
+        label = Gtk.Label(label=title, xalign=0)
+        duration = Gtk.SpinButton.new_with_range(1, MAX_NOTIFICATION_SECONDS, 1)
+        duration.set_numeric(True)
+        duration.set_value(settings[key])
+        duration.get_accessible().set_name(name)
+        description = f"Choose 1–{MAX_NOTIFICATION_SECONDS} seconds."
+        if key == "notification_seconds":
+            description += " Your desktop may hide notifications sooner or omit their buttons. All drive actions remain available in the window."
+        duration.set_tooltip_text(description)
+        duration.get_accessible().set_description(description)
+        label.set_mnemonic_widget(duration)
+        area.pack_start(label, False, False, 0)
+        area.pack_start(duration, False, False, 0)
+        controls[key] = duration
+    sound = Gtk.CheckButton.new_with_mnemonic("_Play notification sounds")
+    sound.set_active(settings["notification_sound"])
+    sound.set_tooltip_text("Uses your desktop's notification sound. Desktop sound settings and Do Not Disturb still apply.")
+    sound.get_accessible().set_description(sound.get_tooltip_text())
+    area.pack_start(sound, False, False, 0)
+    hint = appearance.label("Defaults: desktop 10 seconds · app messages 3 seconds.", "muted")
     hint.set_max_width_chars(50)
     area.pack_start(hint, False, False, 0)
     dialog.show_all()
     result = None
     if dialog.run() == Gtk.ResponseType.OK:
-        duration.update()
-        result = duration.get_value_as_int()
+        for duration in controls.values():
+            duration.update()
+        result = {key: duration.get_value_as_int() for key, duration in controls.items()}
+        result["notification_sound"] = sound.get_active()
     dialog.destroy()
     return result
 

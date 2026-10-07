@@ -1,5 +1,6 @@
 import argparse
 import base64
+import configparser
 from contextlib import nullcontext
 import ctypes
 import grp
@@ -17,7 +18,7 @@ import stat
 
 from .dependencies import PACKAGES, dependency_command, family, missing_packages, package_install_command
 from .model import MedicError
-from .protocol import BUS_NAME
+from .protocol import BUS_NAME, authorization_hours
 from .storage import Preferences, atomic_json, notification_seconds, read_json
 from .releases import ReleaseError, create_public_directory, extract_archive, fetch_release, sync_directory, verify_archive, version, MAX_ARCHIVE, MAX_SOURCE
 
@@ -53,16 +54,40 @@ def ask(message: str) -> bool:
 
 def setup_notifications() -> None:
     preferences = Preferences()
-    seconds = preferences.notification_seconds()
+    settings = {"notification_seconds": preferences.notification_seconds(), "toast_seconds": preferences.toast_seconds(),
+                "notification_sound": preferences.notification_sound_enabled()}
+    if sys.stdin.isatty():
+        for key, title in (("notification_seconds", "Desktop notification"), ("toast_seconds", "In-app message")):
+            while True:
+                answer = input(f"{title} duration in seconds, 1–600 [{settings[key]}]: ").strip()
+                try:
+                    settings[key] = notification_seconds(int(answer) if answer else settings[key])
+                    break
+                except (ValueError, MedicError):
+                    print("Enter a whole number from 1 to 600, or press Enter to keep the default.")
+        while True:
+            default = "Y/n" if settings["notification_sound"] else "y/N"
+            answer = input(f"Play notification sounds? [{default}] ").strip().lower()
+            if answer in {"", "y", "yes", "n", "no"}:
+                if answer:
+                    settings["notification_sound"] = answer in {"y", "yes"}
+                break
+            print("Enter yes or no, or press Enter to keep the current setting.")
+    preferences.set_notification_settings(settings)
+
+
+def setup_security() -> None:
+    preferences = Preferences()
+    hours = preferences.authorization_hours()
     if sys.stdin.isatty():
         while True:
-            answer = input(f"Notification duration in seconds, 1–600 [{seconds}]: ").strip()
+            answer = input(f"Remember administrator approval in hours, 1–24 [{hours}]: ").strip()
             try:
-                seconds = notification_seconds(int(answer) if answer else seconds)
+                hours = authorization_hours(int(answer) if answer else hours)
                 break
             except (ValueError, MedicError):
-                print("Enter a whole number from 1 to 600, or press Enter to keep the default.")
-    preferences.set_notification_seconds(seconds)
+                print("Enter a whole number from 1 to 24, or press Enter to keep the current setting.")
+    preferences.set_authorization_hours(hours)
 
 
 def elevated(arguments: list[str]) -> list[str]:
@@ -329,9 +354,27 @@ def refresh_icons(root: Path) -> None:
         os.utime(directory, None)
 
 
-def autostart(enable: bool) -> None:
+def autostart_path() -> Path:
     config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    path = config / "autostart/io.github.aakashH242.MountMedic.desktop"
+    return config / f"autostart/{BUS_NAME}.desktop"
+
+
+def autostart_enabled() -> bool:
+    path = autostart_path()
+    if not path.exists():
+        return False
+    entry = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        entry.read_string(path.read_text())
+        return (entry.get("Desktop Entry", "Name", fallback="") == "Mount Medic"
+                and not entry.getboolean("Desktop Entry", "Hidden", fallback=False)
+                and entry.getboolean("Desktop Entry", "X-GNOME-Autostart-enabled", fallback=True))
+    except (configparser.Error, ValueError) as error:
+        raise MedicError(f"Cannot read startup settings: {error}") from error
+
+
+def autostart(enable: bool) -> None:
+    path = autostart_path()
     if enable:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(Path("/usr/local/lib/mount-medic/autostart.desktop").read_text())
@@ -378,6 +421,7 @@ def guided(source: Path) -> None:
                                 "--build-user", str(os.getuid())]), check=True)
     Preferences().save_updates({"install_error": None})
     setup_notifications()
+    setup_security()
     if ask("Start Mount Medic automatically after graphical login?"):
         autostart(True)
     print("Installed. Open Mount Medic from the application menu to choose drives. No disks were checked or repaired.")

@@ -45,10 +45,10 @@ def qmp(guest: Path, command: str, arguments: dict) -> dict:
 
 
 def desktop_phase(guest: Path, phase: str) -> None:
-    if phase in {"AUTH_CANCEL", "AUTH_ACCEPT", "AUTH_ENROLL", "WINDOW", "NOTIFICATION"}:
+    if phase in {"AUTH_CANCEL", "AUTH_OTHER_CANCEL", "AUTH_ACCEPT", "AUTH_ENROLL", "WINDOW", "NOTIFICATION"}:
         time.sleep(1 if phase == "NOTIFICATION" else 3)
         qmp(guest, "screendump", {"filename": f"/data/{guest.name}/{phase.lower()}.png", "format": "png"})
-        keys = ["esc"] if phase == "AUTH_CANCEL" else []
+        keys = ["esc"] if phase in {"AUTH_CANCEL", "AUTH_OTHER_CANCEL"} else []
         if phase in {"AUTH_ACCEPT", "AUTH_ENROLL"}:
             keys = ["minus" if char == "-" else char for char in "disposable-vm-only"] + ["ret"]
         for key in keys:
@@ -125,7 +125,7 @@ def run_guest(target: str, directory: Path, reuse: Path | None = None) -> dict:
         try:
             while process.poll() is None and time.monotonic() < deadline:
                 contents = log.read_text(errors="replace")
-                for phase in ("AUTH_CANCEL", "AUTH_ACCEPT", "AUTH_ENROLL", "WINDOW", "NOTIFICATION", "REMOVE", "ADD", "REPLACE", "ADD_REPLACEMENT"):
+                for phase in ("AUTH_CANCEL", "AUTH_OTHER_CANCEL", "AUTH_ACCEPT", "AUTH_ENROLL", "WINDOW", "NOTIFICATION", "REMOVE", "ADD", "REPLACE", "ADD_REPLACEMENT"):
                     if f"MOUNT_MEDIC_PHASE:{phase}\n" in contents and phase not in handled:
                         desktop_phase(guest, phase)
                         handled.add(phase)

@@ -14,6 +14,7 @@ from gi.repository import Gio, GLib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mount_medic.notifications import DISCOVERY_ACTIONS, Notifications, PATH, SERVICE
+from mount_medic.model import MedicError
 from mount_medic.storage import Preferences
 from mount_medic.protocol import BUS_NAME
 
@@ -90,6 +91,15 @@ def exercise():
     assert payload[4] == "&lt;b&gt;Backup &amp; Work&lt;/b&gt;"
     assert payload[5] == ["default", "Open Mount Medic", "monitor", "Monitor", "ignore", "Ignore This Drive"]
     assert payload[6]["transient"] is True
+    assert payload[6]["suppress-sound"] is False and payload[6]["sound-name"] == "message-new-instant"
+    try:
+        with patch.object(preferences, "notification_sound_enabled", side_effect=MedicError("Invalid sound setting")):
+            notifications.show("invalid-sound", "Invalid sound", "No pending notification should remain")
+    except MedicError:
+        pass
+    else:
+        raise AssertionError("Invalid sound setting was accepted")
+    assert "invalid-sound" not in notifications.active and len(server.calls) == 1
     server.emit("ActionInvoked", GLib.Variant("(us)", (1, "repair")))
     server.emit("ActionInvoked", GLib.Variant("(us)", (1, "monitor")))
     wait_for(lambda: len(actions) == 1 and 1 in server.closed)
@@ -103,9 +113,11 @@ def exercise():
     assert len(actions) == 1 and not preferences.ignored(), "dismissal must not ignore or enroll"
 
     preferences.set_notification_seconds(1)
+    preferences.set_notification_settings({"notification_sound": False})
     notifications.show(key, "Discovered", "Drive", actions=DISCOVERY_ACTIONS)
     wait_for(lambda: 3 in server.closed)
     assert server.calls[-1][-1] == 1000 and not notifications.active
+    assert server.calls[-1][6]["suppress-sound"] is True and "sound-name" not in server.calls[-1][6]
 
     volume = {"id": key, "identity": {}, "label": "Backup", "device": "/dev/example"}
     preferences.ignore(volume)
@@ -136,6 +148,7 @@ def exercise():
     replacement = NotificationServer()
     wait_for(lambda: notifications.owner == replacement.bus.get_unique_name())
     preferences.set_notification_seconds(10)
+    preferences.set_notification_settings({"notification_sound": True})
     notifications.show(key, "Discovered again", "Drive", actions=DISCOVERY_ACTIONS)
     wait_for(lambda: notifications.active[key]["id"] is not None)
     server.emit("ActionInvoked", GLib.Variant("(us)", (1, "monitor")))
@@ -151,12 +164,18 @@ def exercise():
             messages.append("sent")
         except Exception as error:
             messages.append(error)
-    sender = Thread(target=send_update_error)
-    sender.start()
-    wait_for(lambda: bool(messages))
-    sender.join(timeout=2)
-    assert messages == ["sent"] and replacement.calls[-1][5] == []
-    assert replacement.calls[-1][4] == "&lt;b&gt;Cancelled &amp; retained&lt;/b&gt;"
+    for sound in (True, False):
+        preferences.set_notification_settings({"notification_sound": sound})
+        messages.clear()
+        sender = Thread(target=send_update_error)
+        sender.start()
+        wait_for(lambda: bool(messages))
+        sender.join(timeout=2)
+        assert messages == ["sent"] and replacement.calls[-1][5] == []
+        assert replacement.calls[-1][4] == "&lt;b&gt;Cancelled &amp; retained&lt;/b&gt;"
+        hints = replacement.calls[-1][6]
+        assert hints["suppress-sound"] is not sound
+        assert (hints.get("sound-name") == "message-new-instant") if sound else "sound-name" not in hints
     owner = replacement.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                                       GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 2000, None)
     assert not owner.unpack()[0], "Error reporting took the application name and could block GUI restart"

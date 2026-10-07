@@ -1,12 +1,30 @@
 from datetime import datetime
 from pathlib import Path
+import hashlib
 import os
+import tempfile
 
 from gi.repository import Gdk, Gtk, Pango
 
 from .protocol import BUS_NAME
 
 ASSETS = Path(__file__).with_name("assets")
+
+
+def tray_icon_path() -> Path:
+    name = BUS_NAME + "-symbolic.svg"
+    data = (ASSETS / name).read_bytes()
+    # KDE retains pixels for unchanged icon names and theme paths across updates.
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    directory = cache / "mount-medic" / "icons" / hashlib.sha256(data).hexdigest()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    icon = directory / name
+    if not icon.is_file() or icon.read_bytes() != data:
+        with tempfile.TemporaryDirectory(dir=directory) as temporary:
+            staged = Path(temporary) / name
+            staged.write_bytes(data)
+            staged.replace(icon)
+    return directory
 
 
 def checked_time(timestamp) -> str:

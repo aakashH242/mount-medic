@@ -116,6 +116,18 @@ def download_archive(release: dict, directory: Path) -> Path:
     return path
 
 
+def create_public_directory(path: Path) -> None:
+    # Umask must not hide source/app directories; existing private parents stay private.
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for current in reversed(missing):
+        current.mkdir(mode=0o755)
+        current.chmod(0o755)
+
+
 def extract_archive(archive: Path, destination: Path, release: dict) -> Path:
     prefix = f"mount-medic-{release['version']}"
     source = destination / prefix
@@ -140,9 +152,9 @@ def extract_archive(archive: Path, destination: Path, release: dict) -> Path:
                 if target.exists():
                     raise ReleaseError("Archive paths overlap")
                 if member.isdir():
-                    target.mkdir(parents=True, mode=0o755)
+                    create_public_directory(target)
                 else:
-                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                    create_public_directory(target.parent)
                     with bundle.extractfile(member) as input_file, target.open("xb") as output:
                         shutil.copyfileobj(input_file, output)
                     target.chmod(0o644)

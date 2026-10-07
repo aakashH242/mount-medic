@@ -17,7 +17,7 @@ from .dependencies import PACKAGES, dependency_command, family, missing_packages
 from .model import MedicError
 from .protocol import BUS_NAME
 from .storage import Preferences, atomic_json, notification_seconds, read_json
-from .releases import ReleaseError, extract_archive, fetch_release, verify_archive, version, MAX_ARCHIVE
+from .releases import ReleaseError, create_public_directory, extract_archive, fetch_release, verify_archive, version, MAX_ARCHIVE
 
 LIBRARY = Path("usr/local/lib/mount-medic")
 MANIFEST = LIBRARY / "manifest.json"
@@ -122,7 +122,7 @@ def sync_directory(path: Path) -> None:
 
 def write_file(path: Path, contents: tuple) -> None:
     content, mode = contents
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    create_public_directory(path.parent)
     descriptor, temporary = tempfile.mkstemp(dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
@@ -192,7 +192,8 @@ def install_tree(source: Path, root: Path) -> dict:
     files = payload(source)
     library = safe_target(root, str(LIBRARY))
     transaction = safe_target(root, str(TRANSACTION))
-    transaction.mkdir(parents=True, mode=0o700)
+    create_public_directory(transaction.parent)
+    transaction.mkdir(mode=0o700)
     staged = transaction / "library"
     manifest = {}
     try:
@@ -201,7 +202,7 @@ def install_tree(source: Path, root: Path) -> dict:
                 safe_target(root, str(path.relative_to(root)))
                 if not (path.is_dir() or path.is_file()):
                     raise MedicError("Unexpected installed file type")
-        staged.mkdir(mode=0o755)
+        create_public_directory(staged)
         previous = {}
         for relative, contents in files.items():
             target = safe_target(root, relative)

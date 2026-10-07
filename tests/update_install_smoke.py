@@ -53,12 +53,18 @@ def exercise():
         archive = root / "assets" / release["archive"]
         args = SimpleNamespace(upgrade=TARGET_VERSION, sha256=release["sha256"], archive=archive, build_user=1000, approved_packages=[])
         destination = root / "installed"
+        destination.mkdir(mode=0o755)
+        destination.chmod(0o755)
         settings = destination / "var/lib/mount-medic/1000.json"
         atomic_json(settings, {"drive": {"monitor": True, "auto_repair": True}})
         real_install = installer.install_tree
         with patch.object(installer, "fetch_release", return_value=release), patch.object(installer, "missing_packages", return_value=[]), patch.object(installer, "install_tree", side_effect=lambda tree, ignored: real_install(tree, destination)):
             with patch.object(installer.subprocess, "run", wraps=subprocess.run) as run:
-                result = installer.upgrade_release(args)
+                previous = os.umask(0o077)
+                try:
+                    result = installer.upgrade_release(args)
+                finally:
+                    os.umask(previous)
             build_call = next(call for call in run.call_args_list if call.args[0] == ["make", "all"])
             assert build_call.kwargs["user"] > 0 and build_call.kwargs["user"] != args.build_user
             assert build_call.kwargs["extra_groups"] == []
@@ -83,7 +89,11 @@ def exercise():
                 else:
                     raise AssertionError("corrupt archive accepted by privileged helper")
         exercise_launcher_guard(root, build_call.kwargs["user"])
-        print("PASS: protected archive verified, isolated build UID, complete root-owned install, settings preserved, corruption refused, normal-user launchers handle private recovery/staging markers")
+        library = destination / installer.LIBRARY
+        code = f"import sys, os; from pathlib import Path; sys.path.insert(0, {str(library)!r}); from mount_medic import __version__; assert __version__ == {TARGET_VERSION!r}; assert os.access({str(binary)!r}, os.X_OK); Path({str(destination / 'usr/local/share/applications/io.github.aakashH242.MountMedic.desktop')!r}).read_bytes(); print('readable')"
+        reader = subprocess.run([sys.executable, "-IB", "-c", code], user=build_call.kwargs["user"], group=build_call.kwargs["group"], extra_groups=[], cwd="/tmp", capture_output=True, text=True)
+        assert reader.returncode == 0 and reader.stdout.strip() == "readable", reader
+        print("PASS: protected archive verified, isolated build UID, complete root-owned install, settings preserved, corruption refused, normal-user recovery/staging guards and app access under umask 077")
 
 
 if __name__ == "__main__":

@@ -119,6 +119,23 @@ class InstallerTests(unittest.TestCase):
                 uninstall_tree(root)
             self.assertEqual(unrelated.read_text(), "keep")
 
+    def test_restrictive_umask_keeps_new_application_directories_readable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {"usr/local/lib/mount-medic/mount_medic/__init__.py": (b"app", 0o644),
+                     "usr/local/share/applications/io.github.aakashH242.MountMedic.desktop": (b"desktop", 0o644)}
+            previous = os.umask(0o077)
+            try:
+                with patch("mount_medic.installer.payload", return_value=files):
+                    install_tree(root, root)
+            finally:
+                os.umask(previous)
+            directories = [root / "usr", root / "usr/local", root / "usr/local/lib", root / "usr/local/share",
+                           root / "usr/local/lib/mount-medic", root / "usr/local/lib/mount-medic/mount_medic",
+                           root / "usr/local/share/applications"]
+            self.assertEqual([path.stat().st_mode & 0o777 for path in directories], [0o755] * len(directories))
+            self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+
     def test_modified_installed_file_is_retained(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

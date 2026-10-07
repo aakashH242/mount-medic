@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from threading import Thread
 from unittest.mock import patch
 
 import gi
@@ -14,6 +15,7 @@ from gi.repository import Gio, GLib
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mount_medic.notifications import DISCOVERY_ACTIONS, Notifications, PATH, SERVICE
 from mount_medic.storage import Preferences
+from mount_medic.protocol import BUS_NAME
 
 XML = """<node><interface name="org.freedesktop.Notifications">
 <method name="Notify">
@@ -140,12 +142,28 @@ def exercise():
     assert actions == [("monitor", key), ("ignore", key)], "ignore stale actions from the old daemon"
     notifications.close_all()
     wait_for(lambda: 1 in replacement.closed)
+    messages = []
+    def send_update_error():
+        try:
+            notifications.message("Mount Medic update failed", "<b>Cancelled & retained</b>")
+            messages.append("sent")
+        except Exception as error:
+            messages.append(error)
+    sender = Thread(target=send_update_error)
+    sender.start()
+    wait_for(lambda: bool(messages))
+    sender.join(timeout=2)
+    assert messages == ["sent"] and replacement.calls[-1][5] == []
+    assert replacement.calls[-1][4] == "&lt;b&gt;Cancelled &amp; retained&lt;/b&gt;"
+    owner = replacement.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
+                                      GLib.Variant("(s)", (BUS_NAME,)), None, Gio.DBusCallFlags.NONE, 2000, None)
+    assert not owner.unpack()[0], "Error reporting took the application name and could block GUI restart"
     replacement.release()
     wait_for(lambda: notifications.owner is None)
     notifications.show(key, "Discovered", "Drive")
     wait_for(lambda: len(errors) == 2)
     assert not notifications.active
-    print("PASS: native D-Bus payload/actions, escaping, dismissal, real expiry, persistent ignore, late replies, failure and daemon restart")
+    print("PASS: native D-Bus payload/actions, escaping, dismissal, real expiry, persistent ignore, late replies, failure, daemon restart and updater errors without application ownership")
 
 
 if __name__ == "__main__":

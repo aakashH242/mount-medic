@@ -12,6 +12,14 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Limited NTFS recovery with explicit per-drive permission")
     root.add_argument("--version", action="version", version=__version__)
     commands = root.add_subparsers(dest="command", required=True)
+    update = commands.add_parser("update", help="Check, install or ignore an application release")
+    actions = update.add_subparsers(dest="action", required=True)
+    for name in ("check", "install", "ignore"):
+        action = actions.add_parser(name)
+        action.add_argument("--json", action="store_true")
+        action.add_argument("--dry-run", action="store_true")
+        if name == "ignore":
+            action.add_argument("version")
     for name in ("gui", "watch", "list", "check", "repair", "mount", "unmount", "configure", "doctor", "uninstall"):
         sub = commands.add_parser(name)
         sub.add_argument("--json", action="store_true")
@@ -67,6 +75,9 @@ def configuration(args) -> dict:
 
 
 def execute(args):
+    if args.command == "update":
+        from .updates import cli
+        return cli(args)
     if args.dry_run:
         preview = {"dry_run": True, "operation": args.command,
                    "volume_id": getattr(args, "volume_id", None), "notice": REPAIR_NOTICE,
@@ -117,7 +128,7 @@ def exit_status(value) -> int:
                                     or row.get("mount", {}).get("state") == "failed") for row in rows):
         return 2
     return 1 if any(isinstance(row, dict) and row.get("state") not in
-                    {None, "ready", "clean", "mounted_rw", "mounted", "unmounted", "unmanaged"} for row in rows) else 0
+                    {None, "ready", "clean", "mounted_rw", "mounted", "unmounted", "unmanaged", "current"} for row in rows) else 0
 
 
 def main() -> int:
@@ -137,5 +148,6 @@ def main() -> int:
         print(json.dumps({"error": str(error)}, ensure_ascii=True) if args.json else f"Mount Medic: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("Cancelled. An already-started privileged repair continues independently.", file=sys.stderr)
+        message = "Update cancelled." if args.command == "update" else "Cancelled. An already-started privileged repair continues independently."
+        print(message, file=sys.stderr)
         return 2

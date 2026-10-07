@@ -10,8 +10,8 @@
 .mount-medic .brand-name { font-size: 1.05em; font-weight: 700; }
 .mount-medic .muted { opacity: 0.78; }
 .mount-medic headerbar { padding: 8px 12px; background-image: none; background-color: @theme_bg_color; }
-.mount-medic button {
-  border-radius: 8px;
+.mount-medic button:not(.titlebutton) {
+  border-radius: 4px;
   padding: 8px 14px;
   background-image: none;
   background-color: @theme_base_color;
@@ -20,19 +20,18 @@
   box-shadow: none;
   text-shadow: none;
 }
-.mount-medic button:hover { background-color: mix(@theme_base_color, @theme_fg_color, 0.06); }
-.mount-medic button:active { background-color: mix(@theme_base_color, @theme_fg_color, 0.12); }
-.mount-medic button:disabled { color: alpha(@theme_fg_color, 0.45); }
-.mount-medic headerbar button.titlebutton { background-color: transparent; border-color: transparent; }
+.mount-medic button:not(.titlebutton):hover { background-color: mix(@theme_base_color, @theme_fg_color, 0.06); }
+.mount-medic button:not(.titlebutton):active { background-color: mix(@theme_base_color, @theme_fg_color, 0.12); }
+.mount-medic button:not(.titlebutton):disabled { color: alpha(@theme_fg_color, 0.45); }
 .mount-medic button.image-button { padding: 8px; }
 .mount-medic .drive-list, .mount-medic .inspector {
   background-color: @theme_base_color;
   border: 1px solid @medic_border;
-  border-radius: 12px;
+  border-radius: 4px;
 }
 .mount-medic treeview { background-color: @theme_base_color; }
 .mount-medic treeview.view:selected { background-color: @medic_accent; color: @medic_on_accent; }
-.mount-medic treeview header button {
+.mount-medic treeview header button:not(.titlebutton) {
   border: none;
   border-bottom: 1px solid @medic_border;
   border-radius: 0;
@@ -43,10 +42,10 @@
   padding: 10px 12px;
   font-weight: 600;
 }
-.mount-medic .inspector { padding: 18px; }
+.mount-medic .inspector { padding: 16px; }
 .mount-medic .permissions { margin-top: 6px; }
 .mount-medic .status-line { font-size: 0.95em; }
-.mount-medic .primary-action {
+.mount-medic button.primary-action {
   background-image: none;
   background-color: @medic_accent;
   color: @medic_on_accent;
@@ -55,14 +54,14 @@
   text-shadow: none;
   font-weight: 600;
 }
-.mount-medic .primary-action:hover { background-color: shade(@medic_accent, 1.12); }
-.mount-medic .primary-action:active { background-color: shade(@medic_accent, 0.85); }
-.mount-medic .primary-action:disabled { opacity: 0.5; color: @medic_on_accent; }
+.mount-medic button.primary-action:hover { background-color: shade(@medic_accent, 1.12); }
+.mount-medic button.primary-action:active { background-color: shade(@medic_accent, 0.85); }
+.mount-medic button.primary-action:disabled { opacity: 0.5; color: @medic_on_accent; }
 .mount-medic button:focus, .mount-medic treeview:focus, .mount-medic expander:focus {
   outline-style: solid;
   outline-width: 2px;
   outline-offset: -3px;
   outline-color: @theme_fg_color;
 }
-.mount-medic .primary-action:focus { outline-color: @medic_on_accent; }
+.mount-medic button.primary-action:focus { outline-color: @medic_on_accent; }
 .mount-medic .empty-state { padding: 32px; }

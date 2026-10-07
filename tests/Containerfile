@@ -1,4 +1,4 @@
 FROM debian:13-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 gcc libc6-dev make pkg-config ntfs-3g ntfs-3g-dev util-linux dbus-daemon polkitd udisks2 xvfb xauth shellcheck python3-coverage && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 gcc libc6-dev make pkg-config ntfs-3g ntfs-3g-dev util-linux dbus-daemon polkitd pkexec udisks2 xvfb xauth shellcheck python3-coverage && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
 CMD ["make", "test"]

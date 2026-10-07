@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 import os
 
@@ -6,6 +7,13 @@ from gi.repository import Gdk, Gtk, Pango
 from .protocol import BUS_NAME
 
 ASSETS = Path(__file__).with_name("assets")
+
+
+def checked_time(timestamp) -> str:
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%d %b %H:%M") if timestamp else "—"
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "—"
 
 
 def initialize():

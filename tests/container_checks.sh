@@ -7,10 +7,15 @@ make clean
 make test
 python3 -m compileall -q mount_medic
 dbus-run-session -- python3 tests/notification_smoke.py
+dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/update_desktop_smoke.py
+if [ "${MM_UPDATE_INSTALL_SMOKE:-0}" = 1 ]; then
+    python3 tests/update_install_smoke.py
+fi
 python3 -m mount_medic check --dry-run --json
 python3 install.py --apply /work --destdir /tmp/staged
 python3 install.py --apply /work --destdir /tmp/staged
-MM_STAGED_ROOT=/tmp/staged dbus-run-session -- xvfb-run -a python3 tests/ui_smoke.py "${MM_ARTIFACTS:-/tmp}/ui.png"
+# Some distributions default Xvfb to 640x480, clipping the GTK header controls.
+MM_STAGED_ROOT=/tmp/staged dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' python3 tests/ui_smoke.py "${MM_ARTIFACTS:-/tmp}/ui.png"
 python3 install.py --remove --destdir /tmp/staged
 test ! -e /tmp/staged/usr/local/share/icons/hicolor/256x256/apps/io.github.aakashH242.MountMedic.png
 if command -v shellcheck >/dev/null; then

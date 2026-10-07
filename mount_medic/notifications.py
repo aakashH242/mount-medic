@@ -31,10 +31,7 @@ class Notifications:
         entry = {"id": None, "timer": None, "owner": self.owner, "generation": self.generation,
                  "actions": {"default", *actions[::2]}}
         self.active[key] = entry
-        parameters = GLib.Variant("(susssasa{sv}i)", (
-            "Mount Medic", 0, str(ASSETS / f"{BUS_NAME}.png"), title, GLib.markup_escape_text(body),
-            ["default", "Open Mount Medic", *actions],
-            {"desktop-entry": GLib.Variant("s", BUS_NAME), "transient": GLib.Variant("b", True)}, seconds * 1000))
+        parameters = self.parameters(title, body, ["default", "Open Mount Medic", *actions])
 
         def sent(proxy, result, unused):
             try:
@@ -57,6 +54,16 @@ class Notifications:
                     self.on_error(f"Desktop notifications unavailable: {error.message}. Open Mount Medic to manage drives.")
 
         self.proxy.call("Notify", parameters, Gio.DBusCallFlags.NONE, 3000, None, sent, None)
+
+    def parameters(self, title, body, actions):
+        return GLib.Variant("(susssasa{sv}i)", (
+            "Mount Medic", 0, str(ASSETS / f"{BUS_NAME}.png"), title, GLib.markup_escape_text(body), actions,
+            {"desktop-entry": GLib.Variant("s", BUS_NAME), "transient": GLib.Variant("b", True)},
+            self.preferences.notification_seconds() * 1000))
+
+    def message(self, title, body):
+        # A short-lived updater must send before exiting without owning the application's D-Bus name.
+        self.proxy.call_sync("Notify", self.parameters(title, body, []), Gio.DBusCallFlags.NONE, 3000, None)
 
     def close_remote(self, entry):
         if entry["id"] and entry["owner"]:

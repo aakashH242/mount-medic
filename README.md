@@ -18,15 +18,13 @@ Python handles discovery and policy, GTK 3 provides the native window, and a sma
 
 ## Install
 
-**The guided installer can install the required packages for you** on Debian/Ubuntu, Fedora, Arch, openSUSE, and Alpine. It shows the package-manager command and asks for your permission before running it.
-
-Run this one command in a terminal, **as your normal user**:
+Run this command in a terminal, **as your normal user**:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/aakashH242/mount-medic/main/install.sh | bash -s -- --download
 ```
 
-To start this command, you need `curl`, `bash`, `tar`, and Python 3.11+. The installer handles the remaining packages after you approve. Run it without `sudo`; it requests administrator access when needed.
+You'll need `curl`, `bash`, and Python 3.11+. On Debian/Ubuntu, Fedora, Arch, openSUSE, and Alpine, the installer offers to install any other packages it needs. Run it without `sudo`; it asks for administrator access when needed.
 
 Alternatively, from a checkout:
 
@@ -34,14 +32,14 @@ Alternatively, from a checkout:
 ./install.sh
 ```
 
-Follow the prompts to install dependencies, review the application files, set the notification duration (default **10 seconds**), and choose whether Mount Medic starts after login. **On Arch, installing dependencies includes a full system upgrade.**
+Review the summary, enter your administrator password when asked, and choose your notification duration (default **10 seconds**) and whether the app starts after login. **On Arch, installing missing packages includes a full system upgrade.**
 
 Nothing is enrolled, inspected, repaired, or mounted during installation. Once installed, open **Mount Medic** from your application menu.
 
 <details>
 <summary>Dependencies, manual setup, and installation details</summary>
 
-The download command fetches the current `main` source into a temporary directory, runs the guided installer, and cleans up afterward. The installer builds the native probe without root, previews the installed files and privileged integration, and requests administrator authentication for system changes.
+The download command installs the latest stable release. The guided installer shows what it will install and asks for administrator access once. Your notification and startup choices are saved afterward.
 
 For manual setup or distributions without a built-in package command, the requirements are Linux, Python 3.11+, a C compiler, `make`, `pkg-config`, the distribution's `libntfs-3g` development package, NTFS utilities including `ntfsfix`, and util-linux. Desktop operation additionally needs GTK 3/PyGObject, a system and session D-Bus, UDisks2, polkit, and the desktop's authentication agent. Ayatana AppIndicator or AppIndicator is optional. The installer supplies package commands for the distro families listed above; it does not configure a missing desktop session or authentication agent.
 
@@ -57,101 +55,147 @@ On Alpine/OpenRC, desktop authorization requires `polkit-elogind`, a running `el
 
 ## Use
 
-Open **Mount Medic** from the application menu, or run:
+Open **Mount Medic** from your application menu and select a drive. Enable monitoring if you want background checks; automatic repair and mounting are separate choices and are off by default.
+
+### Command line
+
+Prefer a terminal? These commands cover the usual tasks. Use `mount-medic --help` or `mount-medic COMMAND --help` for more options.
+
+#### Check drives
 
 ```sh
-mount-medic gui                                             # Open the desktop window
-mount-medic list                                            # List discovered volumes and their IDs
-mount-medic check --json                                    # Check enrolled drives read-only; output JSON
-mount-medic check VOLUME_ID --json                          # Check one drive read-only without enrolling it; output JSON
-mount-medic configure VOLUME_ID --monitor on                 # Enroll this drive for automatic read-only checks
-mount-medic configure VOLUME_ID --monitor on --auto-repair on # Enable checks and authorize automatic repair when safe
-mount-medic configure VOLUME_ID --auto-mount on              # Allow automatic mounting after successful repair
-mount-medic repair VOLUME_ID --dry-run --json                # Preview the repair plan as JSON without changing the drive
-mount-medic repair VOLUME_ID                                # Request a limited repair, clearing the dirty flag on success
-mount-medic repair VOLUME_ID --keep-dirty                    # Request a limited repair while retaining a Windows check request
-mount-medic repair VOLUME_ID --retry                         # Explicitly retry after reviewing an unresolved repair attempt
-mount-medic mount VOLUME_ID                                 # Mount the drive through UDisks, subject to safety checks
-mount-medic unmount VOLUME_ID                               # Request a normal unmount; stop if the drive is busy
-mount-medic watch                                          # Run the session watcher for checks, authorized actions, and notifications
+mount-medic gui                     # Open the desktop window
+mount-medic doctor --json           # Check dependencies and service availability
+mount-medic list                    # List discovered drives and their volume IDs
+mount-medic check VOLUME_ID --json  # Check one drive read-only without enrolling it
+mount-medic check --json            # Check enrolled drives only
 ```
 
-Replace `VOLUME_ID` with the 24-character ID from `list`. It incorporates the filesystem UUID, available disk hardware identity, partition UUID, size, and partition location. Device names and labels are never sufficient authorization. A changed identity becomes unmanaged; duplicate UUIDs and weak identities cannot receive automatic repair.
+Replace `VOLUME_ID` with the current ID from `list`. It identifies the drive using its filesystem and hardware identity, not just its label or device path. A changed identity becomes unmanaged and needs fresh permission.
 
-`configure` without changes shows saved permissions. Checks and write permissions are separate. Granting or changing write permissions requires administrator authentication, as does every manual repair. The window offers the same controls and both manual policies. `--keep-dirty` uses ordinary `ntfsfix`, leaving or setting the request for a Windows check. Cancel at the confirmation or authentication dialog before execution. Closing the window does not terminate an already-started repair.
+#### Monitoring and automatic actions
 
-The native window lists discovered and previously monitored drives. Its **Monitoring** column shows **Added**, **Not added**, or **Ignored**. Select a drive and choose **Monitor** to enable background checks and choose automatic repair and mounting separately; both automatic options start off. **Permissions** edits those choices. Saving the three permissions together requires administrator authentication. **Remove** stops monitoring and revokes both automatic permissions, including for disconnected drives; diagnostic history is retained.
+```sh
+mount-medic configure VOLUME_ID                             # Show this drive's saved permissions
+mount-medic configure VOLUME_ID --monitor on                # Enable background read-only checks
+mount-medic configure VOLUME_ID --monitor on --auto-repair on # Also authorize eligible automatic repairs
+mount-medic configure VOLUME_ID --auto-mount on             # Allow mounting after a successful repair
+mount-medic watch                                          # Start the session watcher
+```
 
-The window follows your GTK light/dark theme and system text size. **Drive details** expands the full identity and last check; **More** contains mounting, safe unmounting, **Ignore This Drive**, and raw diagnostics. The ink-and-teal drive mark identifies the launcher, window, tray, and notifications. Its editable SVG and PNG fallback live in `mount_medic/assets`; the fallback keeps the app icon visible without an SVG decoder.
+Checks, automatic repair, and automatic mounting are separate permissions. Changing write permissions requires confirmation and administrator authentication. Only enable automatic actions for drives you intend to manage.
 
-`--dry-run` shows the proposed action and discovery information without contacting the worker, requesting authentication, enrolling, mounting, or repairing. Fresh safety checks are still mandatory at execution. Discovery and diagnostic results support `--json`. Exit statuses are **0** for success/no attention, **1** for a finding requiring attention, and **2** for unavailable or failed execution, including cancellation.
+#### Repair and mounting
 
-Automatic mounting is off by default and applies after successful repair. It uses normal UDisks options and verifies directory accessibility as the calling user. Mount failures remain visible even when repair succeeded. **Unmount and inspect** asks for confirmation, performs a normal unmount, and stops if busy. There is no automatic unmount.
+```sh
+mount-medic repair VOLUME_ID --dry-run --json # Preview a proposed repair
+mount-medic repair VOLUME_ID                 # Request a repair, clearing the dirty flag
+mount-medic repair VOLUME_ID --keep-dirty    # Repair while retaining a Windows-check request
+mount-medic mount VOLUME_ID                  # Request a normal UDisks mount
+mount-medic unmount VOLUME_ID                # Request a normal unmount; stop if busy
+```
 
-UDisks' own permissions still apply. A background mount that would require authentication fails without prompting, even when Mount Medic's per-drive mount toggle is enabled.
+A repair preview performs discovery only; it does not certify repair eligibility or change the drive. At execution, the app checks safety again and asks for confirmation and administrator authentication.
+
+The default repair clears the dirty flag and its Windows-check request. `--keep-dirty` retains or sets that request. Repair and mounting have separate results: repair can succeed while mounting fails.
+
+After a failed or interrupted repair, review its outcome before using `mount-medic repair VOLUME_ID --retry`. An already-started privileged repair can continue after its client exits; establish that it has finished before retrying.
+
+#### Update the app
+
+```sh
+mount-medic update check                   # Check for a new version
+mount-medic update install                 # Install the available update
+mount-medic update ignore 1.2.0            # Skip notifications for this version
+mount-medic update install --dry-run --json # Preview an update without installing
+```
+
+Ignoring a version does not stop you installing it later. Updates ask for administrator access and keep your saved settings.
+
+Add `--json` for output you can use in scripts. Checks return **0** when no attention is needed, **1** for a drive finding or available update, and **2** when the command cannot complete.
 
 ## Use with an agent
 
-The [Mount Medic skill](skill/SKILL.md) works **without installing the app or downloading its source code**. The self-contained `skill/` folder includes an inspection script, native Linux commands for explicitly authorized manual repair, and Windows/VM guidance. If the app is already installed, the agent can use its guarded CLI instead.
+The [Mount Medic skill](skill/SKILL.md) works **without installing the app or downloading its source code**. It includes read-only inspection, native Linux recovery guidance, and manual Windows/VM instructions. If the app is installed, the agent can use its guarded CLI.
 
-Install the repository's [`skill/` directory](skill) using your agent's skill installer. For Codex, ask:
+Install the complete [`skill/` folder](skill) with your agent's skill installer. For Codex, ask:
 
 ```text
 Use $skill-installer to install https://github.com/aakashH242/mount-medic/tree/main/skill as mount-medic.
 ```
 
-Keep that folder's `SKILL.md`, `LICENSE`, `scripts/`, `references/`, and `agents/` together. It has no references to files outside the folder. For local development, you can link just `$PWD/skill` into your agent's skill directory; a normal skill installation can be an independent copy.
+Then try: **“Use $mount-medic to diagnose why my NTFS drive will not mount. Do not install anything or repair the drive.”** Restart Codex if the skill does not appear; see the [official skill documentation](https://learn.chatgpt.com/docs/build-skills) for setup.
 
-Invoke it with a request such as **“Use $mount-medic to diagnose why my NTFS drive will not mount. Do not install anything or repair the drive.”** If it does not appear, restart Codex. See the [official skill documentation](https://learn.chatgpt.com/docs/build-skills) for discovery and invocation details.
-
-The standalone helper uses Python 3.8+ and existing Linux utilities; native command examples are included if Python is unavailable. Missing tools are reported, not installed silently. Manual repair needs explicit authorization for the selected drive and does not inherit the app's full safety checks. Adding the skill does not install the application, enroll drives, or grant repair permission.
+The helper uses Python 3.8+ and existing Linux utilities; native commands are also documented. Adding the skill does not install the app or grant repair permission. Manual repair needs explicit per-drive authorization and lacks the app's full safety checks.
 
 ## Startup and notifications
 
-Enable or disable startup through **Settings → Startup**. One per-user XDG autostart entry starts the watcher; there is no second systemd startup mechanism. `watch` and `gui` share a session-bus single-instance application.
+Choose login startup and notification duration in **Settings**. New drives stay unmanaged until you enable monitoring; **Ignore This Drive** suppresses discovery notifications until you remove the entry from **Ignore List**. Ignoring a drive never grants repair or mounting permission.
 
-The open GUI also listens for drive connections. Closing a GUI-only session exits the app; a watcher started at login or with `watch` continues in the background when its window is closed.
-
-After login, the watcher waits 15 seconds, then checks enrolled drives. UDisks events are debounced for two seconds; there is no periodic disk polling. A new unmanaged drive gets a native **NTFS drive discovered** notification with **Monitor** and **Ignore This Drive**. Monitor opens the same permissions dialog as the drive list. Closing the notification with the desktop's dismiss control leaves the drive unmonitored, without repeating the alert during that connection. Reconnecting it or starting a new watcher session can offer it again. Unchanged problems are not repeatedly announced.
-
-**Ignore This Drive** persistently suppresses notifications for that volume identity across reconnects and app restarts. Open **Ignore List** to review ignored drives, including disconnected ones, and remove an entry to allow notifications again. Choosing Monitor and successfully saving permissions also removes its ignore. Ignores never grant repair or mounting permissions. As with enrollment, a changed filesystem or hardware identity is treated as a new drive; labels and `/dev` paths are not identifiers.
-
-Change notification duration through **Settings → Notifications**, from 1 to 600 seconds. The app requests that timeout from the desktop and recalls the notification when it expires. Desktop policies may hide it sooner, suppress notifications, or omit action buttons; the same actions remain available in the window. Preferences and ignores are stored in `$XDG_CONFIG_HOME/mount-medic/preferences.json` and `ignored.json` (normally `~/.config/mount-medic/`). Permissions stay in the root-owned `/var/lib/mount-medic/<UID>.json`; diagnostic history stays under `$XDG_STATE_HOME/mount-medic/` (normally `~/.local/state/mount-medic/`).
-
-The tray uses Ayatana AppIndicator or AppIndicator. Without tray support, use the launcher and notifications; no shell extensions are installed. Without UDisks event support, login and manual checks remain available with a diagnostic message. Background operations never request authentication.
+**Closing the window keeps the app running in the background.** Reopen it from the launcher or tray; use **Settings → Quit Mount Medic** or the tray's **Quit** to stop it. Quitting does not change login startup or saved drive permissions. Background actions never request administrator authentication.
 
 ## Recovery limits
 
-This version permits repair only for a **dirty flag or an unclean journal**, after all required read-only checks complete. It supports ordinary NTFS partitions and whole-device volumes with strong identity. Mounted or busy devices, unsupported storage layouts, hibernation, cached Windows metadata, additional maintenance flags, I/O errors, incomplete checks, and unknown conditions stop repair.
+Mount Medic repairs only eligible **dirty-flag or unclean-journal** problems on NTFS drives. Mounted or busy devices, unsupported layouts, hibernation, cached Windows state, I/O errors, MFT mirror mismatches, and incomplete or uncertain checks stop repair.
 
-MFT mirror mismatches are diagnosed but **not repaired**: the library cannot complete independent hibernation and journal exclusions on that path. Follow [Repair with Windows](skill/references/windows-repair.md) for the manual `chkdsk` procedure. A generic filesystem error is never evidence that repair is safe.
+For hibernation, resume the original Windows installation, save your work, and fully shut it down; disable Fast Startup if needed. For I/O errors or suspected hardware failure, prioritize imaging/recovery rather than repeated repair attempts. A successful repair does not guarantee every file is intact.
 
-The probe overrides library device operations to reject writable opens, writes, and non-read-only ioctls. It does not use `ntfs-3g.probe --readwrite` or rely on `ntfsfix -n` for the read-only boundary. Tests include a dirty image for which both command-line checks return success.
-
-For hibernation/cached metadata, resume Windows, save work, and fully shut it down; disable Fast Startup if needed. For unsupported damage, use [Windows `chkdsk`](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/chkdsk). For I/O failures, prioritize backup/imaging and hardware investigation. Mount Medic never guesses a Windows drive letter.
-
-**Need Windows repair?** The [Repair with Windows guide](skill/references/windows-repair.md) covers booting Windows directly, using a Windows VM with exclusive access to a separate data drive, running `chkdsk`, and checking the drive again in Linux. VM repair is an advanced manual option, not an automatic Mount Medic feature or a guarantee of full data recovery.
+**Need Windows repair? Follow the [Repair with Windows guide](skill/references/windows-repair.md).** It covers booting Windows directly, running `chkdsk`, and checking the drive again in Linux. It also explains using a Windows VM with exclusive access to a separate data drive. VM setup and disk attachment are manual; Mount Medic does not manage VMs.
 
 ## Safety boundary
 
-- The system bus establishes the caller's UID. Root-owned approvals are scoped to that user and volume identity. User configuration cannot grant writes. Background polkit requests use flags `0`, prohibiting prompts.
-- Requests accept fixed operations, validated volume IDs, and booleans. They cannot supply device paths, commands, arbitrary flags, or state locations. Executables come from trusted paths, with controlled environments and bounded output.
-- One operation lock serializes diagnosis and mutation. Fresh discovery, disk sequence numbers, block identity, mount namespaces, FUSE sources, holders, and open device descriptors are checked. Incomplete visibility fails closed.
-- An exclusive kernel block-device claim is retained through diagnosis, repair, and verification. Tools receive the inherited descriptor instead of an old device name. Attempts are fsynced before `ntfsfix` starts; success is recorded only after independent diagnosis and final identity verification.
-- Failed, interrupted, or overdue repairs block automatic retries. A mutating child is never killed by a timeout. An overdue process retains the lock and claim until it exits, then requires an explicitly reviewed retry.
-- The app never formats, clears bad-sector lists, removes hibernation files, forces mounting/unmounting, or modifies `fstab`. Applicable `fstab`/UDisks force or hibernation-removal options block app-initiated mounts. [NTFS3 documentation](https://docs.kernel.org/filesystems/ntfs3.html) discourages forcing dirty mounts.
+Write approvals belong to a specific user and drive identity. The app rechecks the target and requires exclusive access before repair. Failed or interrupted repairs require review before another attempt; do not bypass a safety refusal with another tool.
 
-These safeguards cannot stop unrelated privileged raw-sector writers, validate every file, prevent hardware failures, or make failing media safe. UDisks mounting occurs after the block claim is released; identity is checked again, but mounting is not an atomic transaction with diagnosis.
+Mount Medic never formats drives, clears bad-sector records, removes hibernation files, forces mounts or unmounts, or edits `fstab`. These safeguards cannot prevent hardware failures or interference from unrelated privileged disk tools.
 
 ## State and removal
 
-Ordinary state is under `$XDG_STATE_HOME/mount-medic` (default `~/.local/state/mount-medic`): bounded history, last checks, and notification deduplication. Startup is under `$XDG_CONFIG_HOME/autostart`. Privileged approvals and attempts are separate, root-owned records under `/var/lib/mount-medic`. There is no telemetry or application background network access.
+Before reinstalling or uninstalling, let any disk operation finish and quit through **Settings → Quit Mount Medic** or the tray's **Quit**. Closing the window is not enough. Wait 30 seconds for the worker to become idle; the installer refuses to run over a live worker or disk operation.
+
+### Updates
+
+Mount Medic checks for updates every hour while it is running, including when the window is closed. When a new version is available, choose **Install** or **Ignore this version** from the notification. You won't get the same notification every hour; a later version can still notify you.
+
+You can also open **Settings → Updates** to check now, read what's new, or install a version you previously ignored. If you're offline, try again when connected. Quitting the app pauses automatic checks until you start it again.
+
+Installation asks for administrator access and restarts the app afterward. Let any drive check or repair finish first. Your drive permissions, history, preferences, and login startup choice stay as they are. If extra packages are needed, you'll see them before approving; on Arch this includes a full system upgrade.
+
+**Using v1.0.0?** Run the installer once more to get the updater. After that, you can update from the app or [command line](#update-the-app).
+
+<details>
+<summary>Trouble updating?</summary>
+
+If an update fails, Mount Medic restores the previous app version. If a power cut or interrupted installation leaves it asking for recovery, run:
+
+```sh
+sudo /usr/local/lib/mount-medic/installer --recover
+```
+
+Then open the app again. Recovery restores the app; it does not change your drive permissions or undo approved package installations.
+
+For more detail about a failed GUI update, check `~/.local/state/mount-medic/update.log` (or your `XDG_STATE_HOME`). You can also use the manual reinstall below.
+
+</details>
+
+### Manual reinstall
+
+Run the same guided installer again as your normal user:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/aakashH242/mount-medic/main/install.sh | bash -s -- --download
+```
+
+From an existing checkout, use `./install.sh` instead. You do not need to uninstall first. Reinstallation replaces application files while retaining drive permissions and diagnostic history; the installer asks about notification duration and login startup again.
+
+### Uninstall
 
 ```sh
 mount-medic uninstall
 ```
 
-Close the watcher and allow the worker to become idle first. Reinstall/removal refuses to run over a live worker or disk operation. Uninstall checks its manifest and hashes, preserves modified/unrelated files, revokes write approvals, and removes the invoking user's startup entry. History and preferences remain; remove retained history explicitly if unwanted. Other users can remove their own inactive startup entries.
+Approve the removal and authenticate when asked. Uninstall removes the installed app and your login startup entry, and revokes write approvals. Modified or unrelated files, preferences, and diagnostic history are preserved. Other users can remove their own inactive startup entries.
+
+Your saved settings and history normally live in `~/.config/mount-medic/` and `~/.local/state/mount-medic/`. Remove those folders separately if you want to delete them. There is no telemetry; update checks contact GitHub, and the app downloads an update only when you choose to install it.
 
 ## License
 

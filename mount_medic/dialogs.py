@@ -67,12 +67,16 @@ class UpdatesDialog(Gtk.Dialog):
         self.notes.set_uri(status.get("release_notes") or "https://github.com/aakashH242/mount-medic/releases")
 
 
-def drive_description(volume: dict) -> str:
+def drive_fields(volume: dict) -> dict:
     identity = volume.get("identity", {})
-    return (f"{volume.get('label') or 'NTFS drive'}\nStorage: {storage_summary(volume)}\n"
-            f"Device: {volume.get('device') or 'Disconnected'}\n"
-            f"Filesystem UUID: {identity.get('uuid', 'Unknown')}\n"
-            f"Disk identity: {identity.get('hardware') or 'Unavailable'}")
+    return {"Drive": volume.get("label") or "NTFS drive", "Storage": storage_summary(volume),
+            "Device": volume.get("device") or "Disconnected", "Filesystem UUID": identity.get("uuid") or "Unknown",
+            "Disk identity": identity.get("hardware") or "Unavailable"}
+
+
+def drive_description(volume: dict) -> str:
+    fields = drive_fields(volume)
+    return f"{fields['Drive']}\n" + "\n".join(f"{name}: {value}" for name, value in fields.items() if name != "Drive")
 
 
 def drive_diagnostics(parent, report):
@@ -122,15 +126,17 @@ def drive_diagnostics(parent, report):
     field = Gtk.CellRendererText(wrap_width=180, wrap_mode=Pango.WrapMode.WORD_CHAR, xpad=12, ypad=8)
     column = Gtk.TreeViewColumn("Field", field, text=0, weight=2)
     column.set_min_width(220)
+    column.set_resizable(True)
     tree.append_column(column)
     value = Gtk.CellRendererText(wrap_width=360, wrap_mode=Pango.WrapMode.WORD_CHAR, xpad=12, ypad=8)
     column = Gtk.TreeViewColumn("Value", value, text=1)
-    column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
+    column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+    column.set_fixed_width(220)
+    column.set_resizable(True)
     column.set_expand(True)
     tree.append_column(column)
     def resize_values(widget, size):
-        # The tree can exceed the viewport; using its width feeds that excess back into wrapping.
-        width = max(120, scroll.get_allocated_width() - tree.get_column(0).get_width() - 36)
+        width = max(1, tree.get_column(1).get_width() - 24)
         if value.get_property("wrap-width") != width:
             value.set_property("wrap-width", width)
             tree.get_column(1).queue_resize()
@@ -171,13 +177,15 @@ def drive_permissions(parent, volume, settings):
     dialog.get_style_context().add_class("mount-medic")
     dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Apply", Gtk.ResponseType.OK)
     dialog.get_widget_for_response(Gtk.ResponseType.OK).get_style_context().add_class("primary-action")
-    area = dialog.get_content_area()
-    area.set_spacing(12)
-    area.set_border_width(16)
-    label = appearance.label(drive_description(volume))
-    label.set_selectable(True)
-    label.set_max_width_chars(60)
-    area.pack_start(label, False, False, 0)
+    area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, border_width=16)
+    scroll = Gtk.ScrolledWindow(propagate_natural_height=True)
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    # Keep the header actions reachable on a 720px screen, even with large text.
+    scroll.set_max_content_height(560)
+    scroll.add(area)
+    dialog.get_content_area().pack_start(scroll, True, True, 0)
+    summary, unused = appearance.detail_grid(drive_fields(volume))
+    area.pack_start(summary, False, False, 0)
     controls = {}
     for key, title, hint in (
             ("monitor", "Background checks", "Read-only checks at login and when this drive connects."),
@@ -196,14 +204,20 @@ def drive_permissions(parent, volume, settings):
             controls[key].set_sensitive(control.get_active())
     controls["monitor"].connect("toggled", monitoring_changed)
     monitoring_changed(controls["monitor"])
+    warning = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    warning.get_style_context().add_class("permission-notice")
+    warning.pack_start(appearance.label("Back up before repair", "detail-label"), False, False, 0)
     notice = appearance.label("Repair resets the journal and clears the dirty flag; interrupted writes may be lost. "
-                              "Back up first. It cannot replace Windows chkdsk.\n"
-                              "Applying changes requires administrator authentication.")
+                              "Back up first. It cannot replace Windows chkdsk.")
+    notice.set_selectable(True)
     notice.set_tooltip_text(REPAIR_NOTICE)
     notice.get_accessible().set_description(REPAIR_NOTICE)
-    notice.set_width_chars(60)
     notice.set_max_width_chars(65)
-    area.pack_start(notice, False, False, 0)
+    warning.pack_start(notice, False, False, 0)
+    area.pack_start(warning, False, False, 0)
+    authentication = appearance.label("Applying changes requires administrator authentication.", "permission-auth")
+    authentication.set_selectable(True)
+    area.pack_start(authentication, False, False, 0)
     dialog.show_all()
     result = None
     if dialog.run() == Gtk.ResponseType.OK:

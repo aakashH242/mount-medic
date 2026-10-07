@@ -15,7 +15,7 @@ from gi.repository import Atk, Gio, GLib, Gtk, Pango
 
 from . import appearance, client, dialogs, updates
 from .appearance import checked_time
-from .dialogs import drive_description
+from .dialogs import drive_description, drive_fields
 from .engine import REPAIR_NOTICE
 from .feedback import Toast
 from .model import MedicError, NEXT_STEPS
@@ -243,18 +243,28 @@ class MedicApplication(Gtk.Application):
         tree.get_accessible().set_name("NTFS drives and their current status")
         for number, title in ((1, "Drive"), (5, "Monitoring"), (2, "Status"), (3, "Last check")):
             renderer = Gtk.CellRendererText(ypad=14, xpad=12, ellipsize=Pango.EllipsizeMode.END)
-            if number == 3:
+            if number in {2, 3}:
                 renderer.set_property("ellipsize", Pango.EllipsizeMode.NONE)
+            if number == 2:
+                renderer.set_property("wrap-mode", Pango.WrapMode.WORD_CHAR)
+                renderer.set_property("wrap-width", 160)
+            if number == 3:
+                renderer.set_property("xpad", 20)
             column = Gtk.TreeViewColumn(title)
-            renderer.set_property("width-chars", {1: 13, 2: 16, 3: 11, 5: 16}[number])
+            renderer.set_property("width-chars", {1: 13, 2: -1, 3: 17, 5: 16}[number])
             column.pack_start(renderer, True)
             column.add_attribute(renderer, "markup" if number == 1 else "text", number)
             column.set_expand(number == 1)
+            column.set_resizable(True)
+            if number == 2:
+                column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+                column.set_fixed_width(184)
+                column.connect("notify::width", self.resize_status, renderer)
             tree.append_column(column)
         self.selection = tree.get_selection()
         self.selection_handler = self.selection.connect("changed", self.selection_changed)
         scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.set_min_content_height(160)
         scroll.add(tree)
         self.drive_stack = Gtk.Stack()
@@ -269,6 +279,12 @@ class MedicApplication(Gtk.Application):
         empty.pack_start(hint, False, False, 0)
         self.drive_stack.add_named(empty, "empty")
         box.pack_start(self.drive_stack, True, True, 0)
+
+    def resize_status(self, column, unused, renderer):
+        width = max(1, column.get_width() - 2 * renderer.get_property("xpad"))
+        if renderer.get_property("wrap-width") != width:
+            renderer.set_property("wrap-width", width)
+            column.queue_resize()
 
     def build_inspector(self, box):
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -320,38 +336,17 @@ class MedicApplication(Gtk.Application):
         self.inspector = panel
 
     def build_drive_details(self):
-        grid = Gtk.Grid(column_spacing=24, row_spacing=8, margin_top=8)
-        grid.get_style_context().add_class("drive-details")
-        self.identity_fields = {}
-        for index, title in enumerate(("Drive", "Storage", "Device", "Filesystem UUID", "Disk identity", "Volume ID", "Last check")):
-            heading = appearance.label(title, "muted")
-            heading.get_style_context().add_class("detail-label")
-            heading.set_valign(Gtk.Align.START)
-            value = appearance.label("", "detail-name" if title == "Drive" else "")
-            value.set_selectable(True)
-            value.set_hexpand(True)
-            value.set_valign(Gtk.Align.START)
-            value.set_max_width_chars(48)
-            if title in {"Device", "Filesystem UUID", "Volume ID"}:
-                value.get_style_context().add_class("detail-id")
-            grid.attach(heading, 0, index, 1, 1)
-            grid.attach(value, 1, index, 1, 1)
-            self.identity_fields[title] = value
+        titles = [*drive_fields({}), "Volume ID", "Last check"]
+        grid, self.identity_fields = appearance.detail_grid(dict.fromkeys(titles, ""))
         self.identity_expander = Gtk.Expander(label="Drive details")
         self.identity_expander.get_label_widget().get_style_context().add_class("detail-label")
         self.identity_expander.add(grid)
 
     def update_drive_details(self, row):
         volume = row["volume"] if row else {}
-        identity = volume.get("identity", {})
-        values = {"Drive": volume.get("label") or "NTFS drive", "Storage": storage_summary(volume),
-                  "Device": volume.get("device") or "Disconnected", "Filesystem UUID": identity.get("uuid") or "Unknown",
-                  "Disk identity": identity.get("hardware") or "Unavailable", "Volume ID": volume.get("id", ""),
+        values = {**drive_fields(volume), "Volume ID": volume.get("id", ""),
                   "Last check": checked_time(row.get("checked_at"))} if row else {}
-        for title, label in self.identity_fields.items():
-            text = values.get(title, "")
-            label.set_text(text)
-            label.get_accessible().set_name(f"{title}: {text}" if text else title)
+        appearance.set_detail_values(self.identity_fields, values)
 
     def close_window(self, window, event):
         self.watch_in_background()

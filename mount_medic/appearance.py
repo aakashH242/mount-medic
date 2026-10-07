@@ -30,7 +30,7 @@ def tray_icon_path() -> Path:
 
 def checked_time(timestamp) -> str:
     try:
-        return datetime.fromtimestamp(timestamp).strftime("%d %b %H:%M") if timestamp else "—"
+        return datetime.fromtimestamp(timestamp).strftime("%d %b %I:%M %p") if timestamp else "—"
     except (TypeError, ValueError, OverflowError, OSError):
         return "—"
 
@@ -60,6 +60,35 @@ def label(text: str, style: str = "") -> Gtk.Label:
     if style:
         widget.get_style_context().add_class(style)
     return widget
+
+
+def detail_grid(values: dict):
+    grid = Gtk.Grid(column_spacing=24, row_spacing=8, margin_top=8)
+    grid.get_style_context().add_class("drive-details")
+    fields = {}
+    for index, title in enumerate(values):
+        heading = label(title, "muted")
+        heading.get_style_context().add_class("detail-label")
+        heading.set_valign(Gtk.Align.START)
+        value = label("", "detail-name" if title == "Drive" else "")
+        value.set_selectable(True)
+        value.set_hexpand(True)
+        value.set_valign(Gtk.Align.START)
+        value.set_max_width_chars(48)
+        if title in {"Device", "Filesystem UUID", "Volume ID"}:
+            value.get_style_context().add_class("detail-id")
+        grid.attach(heading, 0, index, 1, 1)
+        grid.attach(value, 1, index, 1, 1)
+        fields[title] = value
+    set_detail_values(fields, values)
+    return grid, fields
+
+
+def set_detail_values(fields, values):
+    for title, widget in fields.items():
+        text = str(values.get(title, ""))
+        widget.set_text(text)
+        widget.get_accessible().set_name(f"{title}: {text}" if text else title)
 
 
 def storage_meter() -> Gtk.ProgressBar:

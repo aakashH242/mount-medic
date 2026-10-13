@@ -10,6 +10,8 @@ A power cut, crash, or unsafe disconnect can leave an NTFS drive marked as dirty
 
 Mount Medic was written to reduce that back-and-forth for the limited cases Linux tools can address. It checks the drives you choose and can repair a dirty flag or an unclean journal when its safety checks pass. Problems that need Windows, including hibernation and more serious damage, remain outside its repair scope.
 
+It can also recover a stale copy of the volume's dirty flag in the NTFS metadata mirror, after the same safety checks pass. Other mirror damage still needs review. See the [recorded recovery case](docs/stale-volume-mirror-recovery.md).
+
 Python handles discovery and policy, GTK 3 provides the native window, and a small C probe uses the distribution's `libntfs-3g` for read-only diagnosis.
 
 **New drives are unmanaged.** Discovery does not enroll a drive or run Mount Medic's filesystem probe. Enable checks for each drive, then separately authorize automatic repair and, optionally, automatic mounting.
@@ -152,7 +154,7 @@ Notification sounds are on by default. Turn off **Play notification sounds** dur
 
 ## Recovery limits
 
-Mount Medic repairs only eligible **dirty-flag or unclean-journal** problems on NTFS drives. Mounted or busy devices, unsupported layouts, hibernation, cached Windows state, I/O errors, MFT mirror mismatches, and incomplete or uncertain checks stop repair.
+Mount Medic repairs only eligible **dirty-flag or unclean-journal** problems on NTFS drives, including the checked stale-mirror case described above. Mounted or busy devices, unsupported layouts, hibernation, cached Windows state, I/O errors, other MFT mirror mismatches, and incomplete or uncertain checks stop repair.
 
 For hibernation, resume the original Windows installation, save your work, and fully shut it down; disable Fast Startup if needed. For I/O errors or suspected hardware failure, prioritize imaging/recovery rather than repeated repair attempts. A successful repair does not guarantee every file is intact.
 

@@ -14,7 +14,7 @@ Read fresh results and preserve exit status: 0 means success/no attention, 1 a f
 
 ## Repair and permissions
 
-The app permits repair only for eligible dirty-flag/unclean-journal cases after its checks pass. Mounted/busy devices, hibernation/cached metadata, I/O errors, mirror mismatch, unsupported layouts, and incomplete checks stop repair. Do not bypass a refusal by calling the engine, raw D-Bus methods, direct `ntfsfix`, or modifying its stored grants/attempts.
+The app permits repair only for eligible dirty-flag/unclean-journal cases after its checks pass, including a stale dirty flag in the volume metadata mirror. Other mirror mismatches, mounted/busy devices, hibernation/cached metadata, I/O errors, unsupported layouts, and incomplete checks stop repair. Do not bypass a refusal by calling the engine, raw D-Bus methods, direct `ntfsfix`, or modifying its stored grants/attempts.
 
 Preview a proposed repair with `mount-medic repair VOLUME_ID --dry-run --json`. This performs discovery only; it does not certify eligibility. The default repair clears the dirty flag and the Windows-check request. `--keep-dirty` retains/sets that request. Explain the selected behavior before a write.
 

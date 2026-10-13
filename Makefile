@@ -15,8 +15,13 @@ build/journal-fixture: tests/journal_fixture.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDLIBS)
 
-test: all build/journal-fixture
+build/mirror-view-check: tests/mirror_view.c native/probe.c
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDLIBS)
+
+test: all build/journal-fixture build/mirror-view-check
 	python3 -m unittest discover -s tests -v
+	build/mirror-view-check
 	python3 tests/native_images.py
 
 clean:

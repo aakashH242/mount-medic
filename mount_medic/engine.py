@@ -101,6 +101,8 @@ class Engine:
                 try:
                     require_supported(volume)
                     report["actions"] = ["repair"]
+                    if value.get("stale_volume_mirror") is True:
+                        report["next_steps"] = "The volume metadata mirror is stale. " + report["next_steps"]
                 except MedicError as error:
                     report["next_steps"] = str(error)
             elif state == "clean":

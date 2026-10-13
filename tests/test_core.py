@@ -291,6 +291,20 @@ class EngineTests(unittest.TestCase):
         with patch("mount_medic.engine.run", return_value=output):
             self.assertEqual(self.engine.probe_volume(self.volume, 123)["actions"], [])
 
+    def test_stale_mirror_keeps_completed_check_requirement(self):
+        for state, complete, actions in (("dirty", True, ["repair"]), ("unclean_journal", True, ["repair"]), ("dirty", False, []), ("cached_metadata", False, []), ("io_failure", False, [])):
+            with self.subTest(state=state, complete=complete):
+                value = {"schema": 1, "state": state, "complete": complete, "stale_volume_mirror": True}
+                output = subprocess.CompletedProcess([], 0, json.dumps(value), "Stale volume dirty flag in MFT mirror")
+                with patch("mount_medic.engine.run", return_value=output):
+                    report = self.engine.probe_volume(self.volume, 123)
+                self.assertEqual(report["actions"], actions)
+                self.assertNotIn("metadata_mirror", report)
+                if actions:
+                    self.assertTrue(report["next_steps"].startswith("The volume metadata mirror is stale."))
+                if state == "unclean_journal":
+                    self.assertIn("interrupted transactions may be lost", report["next_steps"])
+
 
 class SafetyTests(unittest.TestCase):
     def test_block_descriptor_still_reports_its_device_number(self):

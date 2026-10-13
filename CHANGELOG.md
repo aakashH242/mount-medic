@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0 — 13 October 2026
+
+Mount Medic 1.4.0 can recover a checked stale dirty flag in the NTFS volume metadata mirror—a case that previously stopped with “MFT mirror mismatch.”
+
+- Manual and authorized automatic repairs use the same guarded recovery path, with the existing repair log and verification before mounting.
+- Diagnosis still makes no disk changes. Hibernation, cached Windows state, I/O problems, other mirror damage and incomplete checks continue to stop repair.
+- Diagnostics explain when the volume metadata mirror is stale. The [recorded recovery case](docs/stale-volume-mirror-recovery.md) explains what fixed the reported drive and what the app checks.
+
+To update, open **Settings → Updates** or run `mount-medic update install`. Your saved permissions, preferences and check history are preserved. Limited repair does not replace Windows `chkdsk` or verify every file.
+
 ## 1.3.1 — 7 October 2026
 
 Mount Medic 1.3.1 makes drive permissions and tables easier to read.
